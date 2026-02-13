@@ -16,13 +16,13 @@ logger = logging.getLogger(__name__)
 class ScheduledDiscoveryService:
     """Service for running automated company discovery on a schedule"""
     
-    def __init__(self, store_callback=None):
+    def __init__(self, crm_client=None, notification_service=None):
         """
         Initialize scheduled discovery service
         
         Args:
-            store_callback: Optional callback function to store discovered companies
-                           Should accept result dict from discovery service
+            crm_client: CRMClient instance for storing discovered companies
+            notification_service: NotificationService instance for sending email notifications
         """
         self.scheduler = BackgroundScheduler()
         self.discovery_service = CompanyDiscoveryService(
@@ -33,8 +33,19 @@ class ScheduledDiscoveryService:
             enable_venturebeat=True,
             enable_producthunt=False  # Still placeholder
         )
-        self.store_callback = store_callback
+        self.crm_client = crm_client
+        self.notification_service = notification_service
         self.is_running = False
+        
+        if crm_client:
+            logger.info("[Scheduler] CRM storage enabled")
+        else:
+            logger.warning("[Scheduler] CRM storage disabled - companies will not be stored")
+        
+        if notification_service:
+            logger.info("[Scheduler] Email notifications enabled")
+        else:
+            logger.warning("[Scheduler] Email notifications disabled")
     
     def start(self, 
               daily_hour: int = 9, 
@@ -128,16 +139,26 @@ class ScheduledDiscoveryService:
                 logger.info(f"[Scheduler] Sources: {', '.join(sources_used)}")
                 logger.info("=" * 60)
                 
-                # Store companies if callback provided
-                if self.store_callback:
+                # Store companies in CRM if client provided
+                if self.crm_client and companies_found > 0:
                     try:
-                        self.store_callback(result)
-                        logger.info("[Scheduler] 💾 Companies stored via callback")
+                        logger.info(f"[Scheduler] 💾 Storing {companies_found} companies in CRM...")
+                        stored_count = self._store_companies_in_crm(result.get('companies', []))
+                        logger.info(f"[Scheduler] ✅ Stored {stored_count}/{companies_found} companies in CRM")
                     except Exception as e:
-                        logger.error(f"[Scheduler] ❌ Failed to store companies: {e}")
+                        logger.error(f"[Scheduler] ❌ Failed to store companies in CRM: {e}", exc_info=True)
                 
-                # Send notification (TODO: implement email/webhook)
-                self._send_notification(result, "daily")
+                # Send email notification
+                if self.notification_service:
+                    try:
+                        logger.info("[Scheduler] 📧 Sending email notification...")
+                        success = self.notification_service.send_discovery_notification(result, "daily")
+                        if success:
+                            logger.info("[Scheduler] ✅ Email notification sent successfully")
+                        else:
+                            logger.warning("[Scheduler] ⚠️ Email notification failed (check logs)")
+                    except Exception as e:
+                        logger.error(f"[Scheduler] ❌ Failed to send notification: {e}", exc_info=True)
                 
             else:
                 error = result.get('error', 'Unknown error')
@@ -158,12 +179,20 @@ class ScheduledDiscoveryService:
                 companies_found = len(result.get('companies', []))
                 logger.info(f"[Scheduler] ✅ Hourly check complete: {companies_found} companies found")
                 
-                # Store companies if callback provided
-                if self.store_callback and companies_found > 0:
+                # Store companies in CRM if client provided
+                if self.crm_client and companies_found > 0:
                     try:
-                        self.store_callback(result)
+                        stored_count = self._store_companies_in_crm(result.get('companies', []))
+                        logger.info(f"[Scheduler] 💾 Stored {stored_count}/{companies_found} companies in CRM")
                     except Exception as e:
                         logger.error(f"[Scheduler] ❌ Failed to store: {e}")
+                
+                # Send email notification
+                if self.notification_service and companies_found > 0:
+                    try:
+                        self.notification_service.send_discovery_notification(result, "hourly")
+                    except Exception as e:
+                        logger.error(f"[Scheduler] ❌ Failed to send notification: {e}")
                 
             else:
                 logger.warning(f"[Scheduler] ⚠️ Hourly check failed: {result.get('error')}")
@@ -171,20 +200,7 @@ class ScheduledDiscoveryService:
         except Exception as e:
             logger.error(f"[Scheduler] ❌ Hourly discovery exception: {e}")
     
-    def _send_notification(self, result: Dict, frequency: str = "daily"):
-        """
-        Send notification about discovered companies
-        
-        Args:
-            result: Discovery result dict
-            frequency: 'daily' or 'hourly'
-        """
-        # TODO: Implement email/Slack/Discord notification
-        companies_found = len(result.get('companies', []))
-        sources = result.get('sources_used', [])
-        
-        logger.info(f"[Scheduler] 📧 Notification: {companies_found} companies from {len(sources)} sources ({frequency})")
-        # Future: Send actual email or webhook here
+
     
     def run_manual_discovery(self, limit: Optional[int] = 50) -> Dict:
         """
@@ -204,6 +220,29 @@ class ScheduledDiscoveryService:
             if result['success']:
                 companies_found = len(result.get('companies', []))
                 logger.info(f"[Scheduler] ✅ Manual discovery complete: {companies_found} companies")
+                
+                # Store companies in CRM if client provided
+                if self.crm_client and companies_found > 0:
+                    try:
+                        logger.info(f"[Scheduler] 💾 Storing {companies_found} companies in CRM...")
+                        stored_count = self._store_companies_in_crm(result.get('companies', []))
+                        logger.info(f"[Scheduler] ✅ Stored {stored_count}/{companies_found} companies in CRM")
+                        result['stored_count'] = stored_count
+                    except Exception as e:
+                        logger.error(f"[Scheduler] ❌ Failed to store companies in CRM: {e}", exc_info=True)
+                        result['storage_error'] = str(e)
+                
+                # Send email notification
+                if self.notification_service:
+                    try:
+                        logger.info("[Scheduler] 📧 Sending email notification...")
+                        success = self.notification_service.send_discovery_notification(result, "manual")
+                        if success:
+                            logger.info("[Scheduler] ✅ Email notification sent successfully")
+                        else:
+                            logger.warning("[Scheduler] ⚠️ Email notification failed (check logs)")
+                    except Exception as e:
+                        logger.error(f"[Scheduler] ❌ Failed to send notification: {e}", exc_info=True)
             
             return result
             
@@ -237,3 +276,32 @@ class ScheduledDiscoveryService:
             'active_sources': len(self.discovery_service.scrapers),
             'jobs': jobs
         }
+    
+    def _store_companies_in_crm(self, companies: list[Dict]) -> int:
+        """
+        Store discovered companies in CRM
+        
+        Args:
+            companies: List of company dicts from discovery
+        
+        Returns:
+            int: Number of companies successfully stored
+        """
+        if not self.crm_client:
+            logger.warning("[Scheduler] No CRM client available for storage")
+            return 0
+        
+        stored_count = 0
+        
+        for company in companies:
+            try:
+                result = self.crm_client.store_company(company)
+                if result.get('success'):
+                    stored_count += 1
+                    logger.debug(f"[Scheduler] ✅ Stored: {company.get('company_name')}")
+                else:
+                    logger.warning(f"[Scheduler] ⚠️ Failed to store {company.get('company_name')}: {result.get('error')}")
+            except Exception as e:
+                logger.error(f"[Scheduler] ❌ Error storing {company.get('company_name')}: {e}")
+        
+        return stored_count

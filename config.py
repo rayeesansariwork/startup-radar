@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     # Mistral AI
     mistral_api_key: str
     
+    # Gmail SMTP Notifications
+    gmail_user: Optional[str] = None
+    gmail_app_password: Optional[str] = None
+    notification_recipient: Optional[str] = None
+    
+    # Scheduler Configuration
+    daily_scrape_hour: int = 9  # Hour to run daily discovery (0-23)
+    daily_scrape_minute: int = 0  # Minute to run daily discovery (0-59)
+    
     class Config:
         env_file = ".env"
         case_sensitive = False

@@ -17,7 +17,7 @@ from models import (
     HiringRequest, HiringResponse,
     CompanyInfo, HiringInfo
 )
-from services import CRMClient, CompanyDiscoveryService, ScheduledDiscoveryService
+from services import CRMClient, CompanyDiscoveryService, ScheduledDiscoveryService, NotificationService
 from hiring_detector.checker import EnhancedHiringChecker
 
 # Configure logging
@@ -31,8 +31,23 @@ logger = logging.getLogger(__name__)
 crm = CRMClient()
 hiring_checker = EnhancedHiringChecker(mistral_api_key=settings.mistral_api_key)
 
+# Initialize notification service (if credentials provided)
+notification_service = None
+if settings.gmail_user and settings.gmail_app_password and settings.notification_recipient:
+    notification_service = NotificationService(
+        gmail_user=settings.gmail_user,
+        gmail_app_password=settings.gmail_app_password,
+        recipient=settings.notification_recipient
+    )
+    logger.info("✅ Email notifications enabled")
+else:
+    logger.warning("⚠️ Email notifications disabled - Gmail credentials not configured")
+
 # Initialize scheduled discovery (passive engine)
-scheduler = ScheduledDiscoveryService()
+scheduler = ScheduledDiscoveryService(
+    crm_client=crm,
+    notification_service=notification_service
+)
 
 
 @asynccontextmanager
@@ -42,8 +57,8 @@ async def lifespan(app: FastAPI):
     logger.info("Starting JobProspectorBE...")
     # Start passive discovery engine
     scheduler.start(
-        daily_hour=9,  # Run daily at 9 AM
-        daily_minute=0,
+        daily_hour=settings.daily_scrape_hour,
+        daily_minute=settings.daily_scrape_minute,
         enable_hourly=False,  # Disable hourly for now
         hourly_interval=3
     )
