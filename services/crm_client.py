@@ -111,8 +111,8 @@ class CRMClient:
                 "seo_description": company_data.get('seo_description'),
                 "annual_revenue": company_data.get('funding_info') or company_data.get('annual_revenue'),
                 "total_funding": company_data.get('total_funding'),
-                "latest_funding": company_data.get('latest_funding'),
-                "latest_funding_amount": company_data.get('latest_funding_amount'),
+                "latest_funding": company_data.get('published_date'),
+                "latest_funding_amount": company_data.get('funding_info'),
                 "last_raised_at": company_data.get('last_raised_at'),
                 "number_of_retail_locations": company_data.get('number_of_retail_locations'),
                 "source": "Serper API"
