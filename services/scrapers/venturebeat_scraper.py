@@ -216,12 +216,13 @@ Important:
             # Parse JSON
             try:
                 companies = json.loads(result_text)
-            except json.JSONDecodeError:
-                logger.error(f"[VB-Groq] JSON decode failed")
+            except json.JSONDecodeError as e:
+                logger.error(f"[VB-Mistral] JSON decode failed: {e}")
+                logger.debug(f"[VB-Mistral] Raw response: {result_text[:500]}")
                 return []
             
             if not isinstance(companies, list):
-                logger.warning(f"[VB-Groq] Groq returned non-list")
+                logger.warning(f"[VB-Mistral] Response is not a list")
                 return []
             
             # Normalize and add source metadata
@@ -240,9 +241,9 @@ Important:
                     'published_date': published
                 })
             
-            logger.debug(f"[VB-Groq] Normalized {len(normalized)} companies")
+            logger.debug(f"[VB-Mistral] Normalized {len(normalized)} companies")
             return normalized
             
         except Exception as e:
-            logger.error(f"[VB-Groq] Failed to extract: {type(e).__name__}: {e}")
+            logger.error(f"[VB-Mistral] Failed to extract: {type(e).__name__}: {e}")
             return []
