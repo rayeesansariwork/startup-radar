@@ -21,6 +21,7 @@ class CRMClient:
         self.crm_password = settings.crm_password
         self.access_token = None
         self.token_expires_at = None
+        self.headers = {"Content-Type": "application/json"}  # Default headers
         self._obtain_access_token()
     
     def _obtain_access_token(self) -> bool:
