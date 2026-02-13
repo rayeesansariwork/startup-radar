@@ -33,15 +33,21 @@ hiring_checker = EnhancedHiringChecker(mistral_api_key=settings.mistral_api_key)
 
 # Initialize notification service (if credentials provided)
 notification_service = None
-if settings.gmail_user and settings.gmail_app_password and settings.notification_recipient:
+has_gmail = settings.gmail_user and settings.gmail_app_password
+has_sendgrid = settings.sendgrid_api_key and settings.sendgrid_from_email
+
+if (has_gmail or has_sendgrid) and settings.notification_recipient:
     notification_service = NotificationService(
         gmail_user=settings.gmail_user,
         gmail_app_password=settings.gmail_app_password,
-        recipient=settings.notification_recipient
+        recipient=settings.notification_recipient,
+        sendgrid_api_key=settings.sendgrid_api_key,
+        sendgrid_from_email=settings.sendgrid_from_email
     )
-    logger.info("✅ Email notifications enabled")
+    method = "SendGrid" if has_sendgrid else "Gmail SMTP"
+    logger.info(f"✅ Email notifications enabled via {method}")
 else:
-    logger.warning("⚠️ Email notifications disabled - Gmail credentials not configured")
+    logger.warning("⚠️ Email notifications disabled - No valid credentials configured")
 
 # Initialize scheduled discovery (passive engine)
 scheduler = ScheduledDiscoveryService(

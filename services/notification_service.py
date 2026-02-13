@@ -8,6 +8,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail, Email, To, Content
 
 logger = logging.getLogger(__name__)
 
@@ -15,22 +17,37 @@ logger = logging.getLogger(__name__)
 class NotificationService:
     """Service for sending email notifications about discovery results"""
     
-    def __init__(self, gmail_user: str, gmail_app_password: str, recipient: str):
+    
+    def __init__(
+        self, 
+        gmail_user: Optional[str] = None, 
+        gmail_app_password: Optional[str] = None, 
+        recipient: Optional[str] = None,
+        sendgrid_api_key: Optional[str] = None,
+        sendgrid_from_email: Optional[str] = None
+    ):
         """
-        Initialize notification service
+        Initialize notification service with SendGrid or Gmail SMTP
+        """
+        self.recipient = recipient
         
-        Args:
-            gmail_user: Gmail sender email address
-            gmail_app_password: Gmail app password (not regular password)
-            recipient: Email address to receive notifications
-        """
+        # SendGrid Configuration
+        self.sendgrid_api_key = sendgrid_api_key
+        self.sendgrid_from_email = sendgrid_from_email
+        
+        # Gmail SMTP Configuration (Legacy/Fallback)
         self.gmail_user = gmail_user
         self.gmail_app_password = gmail_app_password
-        self.recipient = recipient
         self.smtp_server = "smtp.gmail.com"
-        self.smtp_port = 587
+        self.smtp_port_tls = 587
+        self.smtp_port_ssl = 465
         
-        logger.info(f"[Notification] Initialized with sender: {gmail_user}, recipient: {recipient}")
+        if self.sendgrid_api_key and self.sendgrid_from_email:
+            logger.info(f"[Notification] initialized with SendGrid (sender: {sendgrid_from_email})")
+        elif self.gmail_user and self.gmail_app_password:
+            logger.info(f"[Notification] Initialized with Gmail SMTP (sender: {gmail_user})")
+        else:
+            logger.warning("[Notification] No email credentials provided!")
     
     def send_discovery_notification(self, result: Dict, discovery_type: str = "daily") -> bool:
         """
@@ -65,7 +82,31 @@ class NotificationService:
                 errors=errors
             )
             
-            # Create email message
+            
+            # 1. Try SendGrid first if configured
+            if self.sendgrid_api_key and self.sendgrid_from_email:
+                try:
+                    logger.info(f"[Notification] Sending email via SendGrid to {self.recipient}...")
+                    sg = SendGridAPIClient(self.sendgrid_api_key)
+                    message = Mail(
+                        from_email=self.sendgrid_from_email,
+                        to_emails=self.recipient,
+                        subject=subject,
+                        html_content=html_body
+                    )
+                    response = sg.send(message)
+                    logger.info(f"[Notification] Email sent via SendGrid! Status: {response.status_code}")
+                    return True
+                except Exception as e:
+                    logger.error(f"[Notification] SendGrid failed: {e}")
+                    logger.info("[Notification] Falling back to Gmail SMTP...")
+            
+            # 2. Fallback to Gmail SMTP if SendGrid missing or failed
+            if not self.gmail_user or not self.gmail_app_password:
+                logger.error("[Notification] No Gmail credentials for fallback. Email not sent.")
+                return False
+
+            # Create SMTP email message
             message = MIMEMultipart('alternative')
             message['Subject'] = subject
             message['From'] = self.gmail_user
@@ -75,19 +116,33 @@ class NotificationService:
             html_part = MIMEText(html_body, 'html')
             message.attach(html_part)
             
-            # Send email via Gmail SMTP
-            logger.info(f"[Notification] Sending email to {self.recipient}...")
+            # Try sending email via Gmail SMTP with fallback
+            logger.info(f"[Notification] Sending email via Gmail SMTP to {self.recipient}...")
             
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                server.starttls()  # Secure connection
-                server.login(self.gmail_user, self.gmail_app_password)
-                server.send_message(message)
-            
-            logger.info(f"[Notification] ✅ Email sent successfully to {self.recipient}")
-            return True
+            # Try TLS first (port 587)
+            try:
+                with smtplib.SMTP(self.smtp_server, self.smtp_port_tls, timeout=10) as server:
+                    server.starttls()  # Secure connection
+                    server.login(self.gmail_user, self.gmail_app_password)
+                    server.send_message(message)
+                logger.info(f"[Notification] Email sent successfully via TLS (port {self.smtp_port_tls})")
+                return True
+            except (OSError, smtplib.SMTPException) as e:
+                logger.warning(f"[Notification] TLS connection failed: {e}")
+                
+                 # Fallback to SSL (port 465)
+                try:
+                    with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port_ssl, timeout=10) as server:
+                        server.login(self.gmail_user, self.gmail_app_password)
+                        server.send_message(message)
+                    logger.info(f"[Notification] Email sent successfully via SSL (port {self.smtp_port_ssl})")
+                    return True
+                except Exception as ssl_error:
+                    logger.error(f"[Notification] SSL connection also failed: {ssl_error}")
+                    raise
             
         except Exception as e:
-            logger.error(f"[Notification] ❌ Failed to send email: {type(e).__name__}: {e}", exc_info=True)
+            logger.error(f"[Notification] Failed to send email: {type(e).__name__}: {e}", exc_info=True)
             return False
     
     def _build_html_email(

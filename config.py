@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     gmail_app_password: Optional[str] = None
     notification_recipient: Optional[str] = None
     
+    # SendGrid Configuration
+    sendgrid_api_key: Optional[str] = None
+    sendgrid_from_email: Optional[str] = None  # Validated sender email in SendGrid
+    
     # Scheduler Configuration
     daily_scrape_hour: int = 9  # Hour to run daily discovery (0-23)
     daily_scrape_minute: int = 0  # Minute to run daily discovery (0-59)

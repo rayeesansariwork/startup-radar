@@ -12,3 +12,4 @@ python-multipart==0.0.6
 feedparser==6.0.11
 APScheduler==3.10.4
 mistralai==1.0.0
+sendgrid==6.11.0
