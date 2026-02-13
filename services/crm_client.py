@@ -17,11 +17,55 @@ class CRMClient:
     
     def __init__(self):
         self.base_url = settings.crm_base_url
-        self.access_token = settings.crm_access_token
-        self.headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
+        self.crm_email = settings.crm_email
+        self.crm_password = settings.crm_password
+        self.access_token = None
+        self.token_expires_at = None
+        self._obtain_access_token()
+    
+    def _obtain_access_token(self) -> bool:
+        """
+        Obtain a fresh access token from CRM API
+        
+        Returns:
+            bool: True if token obtained successfully
+        """
+        try:
+            url = f"{self.base_url}/token/obtain/"
+            payload = {
+                "email": self.crm_email,
+                "password": self.crm_password
+            }
+            
+            logger.info("🔑 Obtaining fresh CRM access token...")
+            
+            response = requests.post(
+                url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                self.access_token = data.get('access')
+                expires_in = data.get('expires_in', 28800)  # Default 8 hours
+                
+                logger.info(f"✅ Access token obtained successfully (expires in {expires_in}s)")
+                
+                # Update headers with new token
+                self.headers = {
+                    "Authorization": f"Bearer {self.access_token}",
+                    "Content-Type": "application/json"
+                }
+                return True
+            else:
+                logger.error(f"❌ Failed to obtain token: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error obtaining access token: {e}", exc_info=True)
+            return False
     
     @retry(
         stop=stop_after_attempt(settings.retry_max_attempts),

@@ -13,7 +13,9 @@ class Settings(BaseSettings):
     
     # CRM Configuration
     crm_base_url: str = "https://salesapi.gravityer.com/api/v1"
-    crm_access_token: str
+    crm_email: str
+    crm_password: str
+    crm_access_token: Optional[str] = None  # Optional - will be obtained dynamically
     
     # Application Settings
     app_host: str = "0.0.0.0"
