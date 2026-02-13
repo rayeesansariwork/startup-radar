@@ -205,12 +205,17 @@ Important:
             
             logger.debug(f"[VB-Mistral] API call completed in {mistral_duration:.2f}s")
             
-            # Robust JSON extraction using regex
-            json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
+            # Clean response - remove markdown code blocks
+            result_text = re.sub(r'```json\s*', '', result_text)
+            result_text = re.sub(r'```\s*', '', result_text)
+            
+            # Extract first valid JSON array
+            json_match = re.search(r'\[.*?\]', result_text, re.DOTALL)
             if json_match:
                 result_text = json_match.group(0)
             else:
                 logger.warning(f"[VB-Mistral] No JSON array found in response")
+                logger.debug(f"[VB-Mistral] Raw: {result_text[:200]}")
                 return []
             
             # Parse JSON
