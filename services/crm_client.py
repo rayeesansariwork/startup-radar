@@ -113,9 +113,9 @@ class CRMClient:
                 "total_funding": company_data.get('total_funding'),
                 "latest_funding": company_data.get('published_date'),
                 "latest_funding_amount": company_data.get('funding_info'),
-                "last_raised_at": company_data.get('last_raised_at'),
+                "last_raised_at": company_data.get('funding_round'),
                 "number_of_retail_locations": company_data.get('number_of_retail_locations'),
-                "source": "Serper API"
+                "source": "ENRICHMENT ENGINE"
             }
             
             logger.info(f"💾 Storing company in CRM: '{payload['company_name']}'")
