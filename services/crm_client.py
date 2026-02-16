@@ -131,6 +131,18 @@ class CRMClient:
             
             logger.info(f"📡 CRM responded: {response.status_code}")
             
+            # Handle 401 - token expired, refresh and retry once
+            if response.status_code == 401:
+                logger.warning("🔄 Token expired (401), refreshing and retrying...")
+                if self._obtain_access_token():
+                    response = requests.post(
+                        url,
+                        json=payload,
+                        headers=self.headers,
+                        timeout=15
+                    )
+                    logger.info(f"📡 Retry after refresh: {response.status_code}")
+            
             if response.status_code in [200, 201]:
                 data = response.json()
                 company_id = data.get('id')
@@ -177,6 +189,17 @@ class CRMClient:
                 headers=self.headers,
                 timeout=15
             )
+            
+            # Handle 401 - token expired, refresh and retry once
+            if response.status_code == 401:
+                logger.warning("🔄 Token expired (401), refreshing and retrying...")
+                if self._obtain_access_token():
+                    response = requests.get(
+                        url,
+                        params=params,
+                        headers=self.headers,
+                        timeout=15
+                    )
             
             if response.status_code == 200:
                 companies = response.json()
