@@ -15,10 +15,12 @@ from config import settings
 from models import (
     DiscoverRequest, DiscoverResponse,
     HiringRequest, HiringResponse,
-    CompanyInfo, HiringInfo
+    CompanyInfo, HiringInfo,
+    FindJobsRequest, FindJobsResponse     # New imports
 )
-from services import CRMClient, CompanyDiscoveryService, ScheduledDiscoveryService, NotificationService
+from services import CRMClient, CompanyDiscoveryService, ScheduledDiscoveryService, NotificationService, HiringPageFinderService
 from hiring_detector.checker import EnhancedHiringChecker
+from hiring_detector.analyzer import JobAnalyzer
 
 # Configure logging
 logging.basicConfig(
@@ -29,7 +31,9 @@ logger = logging.getLogger(__name__)
 
 # Initialize services
 crm = CRMClient()
+crm = CRMClient()
 hiring_checker = EnhancedHiringChecker(mistral_api_key=settings.mistral_api_key)
+hiring_page_finder = HiringPageFinderService()
 
 # Initialize notification service (if credentials provided)
 notification_service = None
@@ -104,6 +108,7 @@ async def root():
         "endpoints": {
             "/api/discover": "Discover funded companies",
             "/api/hiring": "Check hiring status",
+            "/api/find-jobs": "Find and extract jobs from a company website",
             "/api/scheduler/status": "Get scheduler status",
             "/api/scheduler/manual": "Manually trigger discovery"
         }
@@ -323,6 +328,9 @@ async def get_hiring_info(request: HiringRequest):
         hiring_results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Process results
+        # Initialize mail generator
+        mail_generator = JobAnalyzer(settings.mistral_api_key) if settings.mistral_api_key else None
+        
         hiring_infos = []
         hiring_count = 0
         
@@ -337,15 +345,32 @@ async def get_hiring_info(request: HiringRequest):
                     hiring_summary=f"Error: {str(result)}"
                 ))
             else:
-                if result.get('is_hiring'):
+                company_name = company.get('company_name', 'Unknown')
+                job_roles = result.get('job_roles', [])
+                is_hiring = result.get('is_hiring', False)
+                
+                if is_hiring:
                     hiring_count += 1
+                
+                # Generate outreach mail for hiring companies
+                custom_mail = None
+                if is_hiring and job_roles and mail_generator:
+                    try:
+                        custom_mail = mail_generator.generate_outreach_mail(
+                            company_name=company_name,
+                            job_roles=job_roles,
+                            funding_info=company.get('funding_info')
+                        )
+                    except Exception as mail_err:
+                        logger.warning(f"Mail generation failed for {company_name}: {mail_err}")
                 
                 hiring_infos.append(HiringInfo(
                     company_id=company.get('crm_id'),
-                    company_name=company.get('company_name', 'Unknown'),
-                    is_hiring=result.get('is_hiring', False),
+                    company_name=company_name,
+                    is_hiring=is_hiring,
                     job_count=result.get('job_count', 0),
-                    job_roles=result.get('job_roles', []),
+                    job_roles=job_roles,
+                    custom_mail=custom_mail,
                     career_page_url=result.get('career_page_url'),
                     hiring_summary=result.get('hiring_summary'),
                     detection_method=result.get('detection_method')
@@ -363,6 +388,42 @@ async def get_hiring_info(request: HiringRequest):
     except Exception as e:
         logger.error(f"Hiring info scraping failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/find-jobs", response_model=FindJobsResponse)
+async def find_jobs(request: FindJobsRequest):
+    """
+    Find and extract job openings from a company's career page.
+    
+    Steps:
+    1. Search for career page using Serper
+    2. Scrape content
+    3. Extract jobs using Mistral AI
+    """
+    try:
+        logger.info(f"🔎 Finding jobs for: {request.url}")
+        
+        # Run in threadpool to avoid blocking
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, 
+            hiring_page_finder.find_hiring_page,
+            request.url
+        )
+        
+        if "error" in result:
+            # If strictly following user instruction "Handle errors: Return {error: ...}"
+            # But since we use a response model, we should return the model with error field.
+            return FindJobsResponse(error=result["error"])
+            
+        return FindJobsResponse(
+            career_page_url=result.get("career_page_url"),
+            jobs=result.get("jobs", [])
+        )
+        
+    except Exception as e:
+        logger.error(f"Find jobs failed: {e}", exc_info=True)
+        return FindJobsResponse(error=str(e))
 
 
 if __name__ == "__main__":

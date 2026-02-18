@@ -9,7 +9,7 @@ from datetime import datetime
 
 from .scrapers import (YCombinatorScraper, TechCrunchScraper, ProductHuntScraper, 
                        NewsAPIScraper, GoogleNewsScraper, 
-                       VentureBeatScraper)
+                       VentureBeatScraper, F6SScraper)
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,8 @@ class CompanyDiscoveryService:
     def __init__(self, enable_yc: bool = True, enable_techcrunch: bool = True, 
                  enable_producthunt: bool = False, enable_newsapi: bool = True,
                  enable_google_news: bool = True,
-                 enable_venturebeat: bool = True):
+                 enable_venturebeat: bool = True,
+                 enable_f6s: bool = True):
         """
         Initialize discovery service with desired sources
         
@@ -31,6 +32,7 @@ class CompanyDiscoveryService:
             enable_newsapi: Enable News API scraper
             enable_google_news: Enable Google News RSS scraper
             enable_venturebeat: Enable VentureBeat RSS scraper
+            enable_f6s: Enable F6S funding scraper
         """
         self.scrapers = []
         
@@ -64,6 +66,10 @@ class CompanyDiscoveryService:
         if enable_venturebeat:
             self.scrapers.append(VentureBeatScraper())
             logger.info("[Discovery] ✅ VentureBeat RSS scraper enabled")
+        
+        if enable_f6s:
+            self.scrapers.append(F6SScraper())
+            logger.info("[Discovery] ✅ F6S funding scraper enabled")
     
     def discover_companies(self, limit: Optional[int] = None) -> Dict:
         """

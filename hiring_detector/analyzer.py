@@ -172,3 +172,73 @@ Return ONLY a JSON array of cleaned job titles:
                 'job_roles': job_titles[:20],
                 'hiring_summary': f"Found {len(job_titles)} potential positions"
             }
+
+    def generate_outreach_mail(self, company_name: str, job_roles: List[str], funding_info: str = None) -> Dict:
+        """
+        Generate a personalized outreach email for a hiring company using Mistral AI.
+
+        Args:
+            company_name: Name of the company
+            job_roles: List of job titles they are hiring for
+            funding_info: Optional funding information
+
+        Returns:
+            Dict with subject, body, to_hint fields
+        """
+        if not job_roles:
+            return None
+
+        try:
+            # Identify the dominant hiring category
+            roles_text = ", ".join(job_roles[:10])
+
+            prompt = f"""Generate a short, professional B2B cold outreach email for a staffing company called Gravity (info@gravityer.com) to send to {company_name}.
+
+Context:
+- {company_name} is actively hiring for these roles: {roles_text}
+- {"They recently received funding: " + funding_info if funding_info else "They appear to have recently received funding."}
+- Gravity provides cost-effective staff augmentation for tech/engineering roles.
+
+Rules:
+- Keep it under 120 words.
+- Tone: confident, warm, not pushy.
+- Mention the specific team/department they are scaling (infer from the job roles — e.g. "Backend Engineering", "Sales", "Data" etc.)
+- Do NOT use placeholder brackets like [Name].
+- End with a soft CTA to reply or reach out to info@gravityer.com.
+
+Return ONLY valid JSON:
+{{
+  "subject": "email subject line",
+  "body": "full email body text",
+  "team_focus": "the main department/team they are scaling"
+}}"""
+
+            response = self.mistral.chat.complete(
+                model="mistral-large-latest",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=500
+            )
+
+            result_text = response.choices[0].message.content.strip()
+
+            # Clean markdown formatting
+            if '```json' in result_text:
+                result_text = result_text.split('```json')[1].split('```')[0]
+            elif '```' in result_text:
+                result_text = result_text.split('```')[1].split('```')[0]
+
+            result_text = result_text.strip()
+            data = json.loads(result_text)
+
+            logger.info(f"✉️ Outreach mail generated for {company_name} (focus: {data.get('team_focus', 'N/A')})")
+
+            return {
+                'subject': data.get('subject', ''),
+                'body': data.get('body', ''),
+                'team_focus': data.get('team_focus', ''),
+            }
+
+        except Exception as e:
+            logger.error(f"Mail generation failed for {company_name}: {e}")
+            return None

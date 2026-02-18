@@ -14,7 +14,7 @@ class DiscoverRequest(BaseModel):
         example="SaaS startups raised funding 2026"
     )
     limit: int = Field(
-        default=20,
+        default=99,
         ge=1,
         le=100,
         description="Maximum number of companies to search for"
@@ -26,4 +26,13 @@ class HiringRequest(BaseModel):
     companies: List[Dict[str, Any]] = Field(
         ...,
         description="List of companies from /discover endpoint to check for hiring"
+    )
+
+
+class FindJobsRequest(BaseModel):
+    """Request model for /api/find-jobs endpoint"""
+    url: str = Field(
+        ...,
+        description="URL of the company to search for jobs",
+        example="https://openai.com"
     )

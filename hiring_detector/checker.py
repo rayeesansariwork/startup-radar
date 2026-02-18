@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from .platforms import PlatformDetector
 from .scraper import scrape_page_sync, PlaywrightScraper
 from .analyzer import JobAnalyzer
+from .triangulator import HiringTriangulator
 
 logger = logging.getLogger(__name__)
 
@@ -114,11 +115,22 @@ class EnhancedHiringChecker:
             return None
     
     def _find_career_page(self, website: str) -> Optional[str]:
-        """Layer 2: Smart career page detection"""
+        """Layer 2: Smart career page detection (triangulation-first)"""
         try:
             parsed = urlparse(website)
             domain = parsed.netloc or website
             domain = domain.replace('www.', '')
+
+            # --- TRIANGULATION FIRST (Serper ATS → Sitemap → Organic) ---
+            try:
+                triangulator = HiringTriangulator()
+                tri_url, tri_method = triangulator.triangulate(domain)
+                if tri_url:
+                    logger.info(f"✅ Triangulation ({tri_method}): {tri_url}")
+                    return tri_url
+            except Exception as tri_err:
+                logger.warning(f"Triangulation error (falling back): {tri_err}")
+            # --- END TRIANGULATION ---
             
             # Get base URL
             base_url = f"https://{domain}" if not website.startswith('http') else website

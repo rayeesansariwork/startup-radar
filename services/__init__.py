@@ -8,5 +8,6 @@ from .crm_client import CRMClient
 from .company_discovery import CompanyDiscoveryService
 from .scheduled_discovery import ScheduledDiscoveryService
 from .notification_service import NotificationService
+from .hiring_page_finder import HiringPageFinderService
 
-__all__ = ['SerperService', 'CRMClient', 'CompanyDiscoveryService', 'ScheduledDiscoveryService', 'NotificationService']
+__all__ = ['SerperService', 'CRMClient', 'CompanyDiscoveryService', 'ScheduledDiscoveryService', 'NotificationService', 'HiringPageFinderService']

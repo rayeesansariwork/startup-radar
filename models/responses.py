@@ -37,6 +37,7 @@ class HiringInfo(BaseModel):
     is_hiring: bool
     job_count: int
     job_roles: List[str] = []
+    custom_mail: Optional[Dict[str, Any]] = None
     career_page_url: Optional[str] = None
     hiring_summary: Optional[str] = None
     detection_method: Optional[str] = None
@@ -48,3 +49,19 @@ class HiringResponse(BaseModel):
     total_companies: int
     hiring_companies: int
     results: List[HiringInfo]
+
+
+class JobOpening(BaseModel):
+    """Model for a single job opening"""
+    title: str
+    department: str = "N/A"
+    location: str = "N/A"
+    description: str = "N/A"
+    apply_url: str = "N/A"
+
+
+class FindJobsResponse(BaseModel):
+    """Response model for /api/find-jobs endpoint"""
+    career_page_url: Optional[str] = None
+    jobs: List[JobOpening] = []
+    error: Optional[str] = None

@@ -9,6 +9,7 @@ from .producthunt_scraper import ProductHuntScraper
 from .news_api_scraper import NewsAPIScraper
 from .google_news_scraper import GoogleNewsScraper
 from .venturebeat_scraper import VentureBeatScraper
+from .f6s_scraper import F6SScraper
 
 __all__ = [
     'BaseScraper', 
@@ -17,5 +18,7 @@ __all__ = [
     'ProductHuntScraper', 
     'NewsAPIScraper',
     'GoogleNewsScraper',
-    'VentureBeatScraper'
+    'VentureBeatScraper',
+    'F6SScraper'
 ]
+
