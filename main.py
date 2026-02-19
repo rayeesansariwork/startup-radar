@@ -21,6 +21,7 @@ from models import (
 from services import CRMClient, CompanyDiscoveryService, ScheduledDiscoveryService, NotificationService, HiringPageFinderService
 from hiring_detector.checker import EnhancedHiringChecker
 from hiring_detector.analyzer import JobAnalyzer
+from routes.daily_outreach import router as daily_outreach_router
 
 # Configure logging
 logging.basicConfig(
@@ -72,6 +73,42 @@ async def lifespan(app: FastAPI):
         enable_hourly=False,  # Disable hourly for now
         hourly_interval=3
     )
+
+    # ── Schedule daily hiring outreach at 10:10 UTC ──────────────────────
+    from apscheduler.triggers.cron import CronTrigger
+    from routes.daily_outreach import _stream
+    from datetime import datetime, timedelta
+
+    def _run_daily_outreach():
+        """Synchronous wrapper that consumes the full outreach stream."""
+        target_date = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+        logger.info("⏰ [Cron] Daily hiring outreach triggered for %s", target_date)
+
+        async def _consume():
+            async for _ in _stream(target_date, page_size=15):
+                pass  # each yield does its own work (hiring check, mail gen, DB save)
+
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(_consume())
+            else:
+                loop.run_until_complete(_consume())
+        except RuntimeError:
+            asyncio.run(_consume())
+
+        logger.info("✅ [Cron] Daily hiring outreach finished for %s", target_date)
+
+    scheduler.scheduler.add_job(
+        _run_daily_outreach,
+        trigger=CronTrigger(hour=10, minute=10, timezone="UTC"),
+        id="daily_hiring_outreach",
+        name="Daily Hiring Outreach (10:10 UTC)",
+        replace_existing=True,
+    )
+    logger.info("📅 Daily hiring outreach scheduled at 10:10 UTC")
+
     logger.info("JobProspectorBE started successfully")
     
     yield
@@ -80,6 +117,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down JobProspectorBE...")
     scheduler.stop()
     logger.info("JobProspectorBE shut down successfully")
+
 
 
 # Initialize FastAPI app
@@ -99,6 +137,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register routers
+app.include_router(daily_outreach_router)
+
 
 @app.get("/")
 async def root():
@@ -109,8 +150,12 @@ async def root():
             "/api/discover": "Discover funded companies",
             "/api/hiring": "Check hiring status",
             "/api/find-jobs": "Find and extract jobs from a company website",
+            "/api/v1/daily-hiring-outreach/": "SSE: daily hiring outreach (fetch + detect + mail)",
             "/api/scheduler/status": "Get scheduler status",
             "/api/scheduler/manual": "Manually trigger discovery"
+        },
+        "scheduled_jobs": {
+            "daily_hiring_outreach": "Runs automatically at 10:10 UTC every day",
         }
     }
 
