@@ -40,9 +40,13 @@ class Settings(BaseSettings):
     sendgrid_api_key: Optional[str] = None
     sendgrid_from_email: Optional[str] = None  # Validated sender email in SendGrid
     
-    # Scheduler Configuration
-    daily_scrape_hour: int = 9  # Hour to run daily discovery (0-23)
-    daily_scrape_minute: int = 0  # Minute to run daily discovery (0-59)
+    # Scheduler Configuration (values provided in IST, converted to UTC at runtime)
+    daily_scrape_hour: int = 9    # IST hour to run daily discovery (0-23)
+    daily_scrape_minute: int = 0  # IST minute to run daily discovery (0-59)
+
+    # Daily Hiring Outreach Cron (values provided in IST, converted to UTC at runtime)
+    sched_ist_hour: int = 15    # IST hour  for daily hiring-outreach cron
+    sched_ist_minute: int = 40  # IST minute for daily hiring-outreach cron
     
     class Config:
         env_file = ".env"

@@ -69,7 +69,7 @@ class ScheduledDiscoveryService:
             # Daily comprehensive discovery
             self.scheduler.add_job(
                 self.run_daily_discovery,
-                CronTrigger(hour=daily_hour, minute=daily_minute),
+                CronTrigger(hour=daily_hour, minute=daily_minute, timezone="UTC"),
                 id='daily_discovery',
                 name='Daily Company Discovery',
                 replace_existing=True
@@ -80,7 +80,7 @@ class ScheduledDiscoveryService:
             if enable_hourly:
                 self.scheduler.add_job(
                     self.run_hourly_discovery,
-                    CronTrigger(hour=f'*/{hourly_interval}'),
+                    CronTrigger(hour=f'*/{hourly_interval}', timezone="UTC"),
                     id='hourly_discovery',
                     name='Hourly Company Discovery',
                     replace_existing=True

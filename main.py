@@ -4,7 +4,17 @@ JobProspectorBE - FastAPI Application
 Search for funded companies via Serper API and scrape their job listings
 """
 
+# ── CRITICAL: Apply Windows asyncio fix BEFORE any other imports ──────────────
+# This must run first to switch to ProactorEventLoop so Playwright can spawn
+# browser subprocesses on Windows without raising NotImplementedError.
+import os
+
+from core_utils import apply_windows_asyncio_fix
+apply_windows_asyncio_fix()
+# ─────────────────────────────────────────────────────────────────────────────
+
 import logging
+import multiprocessing
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -31,7 +41,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize services
-crm = CRMClient()
 crm = CRMClient()
 hiring_checker = EnhancedHiringChecker(mistral_api_key=settings.mistral_api_key)
 hiring_page_finder = HiringPageFinderService()
@@ -64,20 +73,47 @@ scheduler = ScheduledDiscoveryService(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle events for FastAPI"""
+    # ── Helper: convert an IST hour/minute to UTC ─────────────────────────
+    def _ist_to_utc(ist_hour: int, ist_minute: int):
+        """IST is UTC+5:30. Subtract 5h30m and wrap around 24h."""
+        total_minutes = ist_hour * 60 + ist_minute - (5 * 60 + 30)
+        total_minutes %= 24 * 60  # keep in [0, 1440)
+        return divmod(total_minutes, 60)  # (utc_hour, utc_minute)
+
     # Startup
     logger.info("Starting JobProspectorBE...")
+
+    # Convert DAILY_SCRAPE time from IST → UTC
+    scrape_utc_hour, scrape_utc_minute = _ist_to_utc(
+        settings.daily_scrape_hour, settings.daily_scrape_minute
+    )
+    logger.info(
+        "📅 Daily scrape scheduled: %02d:%02d IST → %02d:%02d UTC",
+        settings.daily_scrape_hour, settings.daily_scrape_minute,
+        scrape_utc_hour, scrape_utc_minute,
+    )
+
     # Start passive discovery engine
     scheduler.start(
-        daily_hour=settings.daily_scrape_hour,
-        daily_minute=settings.daily_scrape_minute,
+        daily_hour=scrape_utc_hour,
+        daily_minute=scrape_utc_minute,
         enable_hourly=False,  # Disable hourly for now
         hourly_interval=3
     )
 
-    # ── Schedule daily hiring outreach at 10:10 UTC ──────────────────────
+    # ── Schedule daily hiring outreach (time from .env, IST → UTC) ────────
     from apscheduler.triggers.cron import CronTrigger
     from routes.daily_outreach import _stream
     from datetime import datetime, timedelta
+
+    outreach_utc_hour, outreach_utc_minute = _ist_to_utc(
+        settings.sched_ist_hour, settings.sched_ist_minute
+    )
+    logger.info(
+        "📅 Daily hiring outreach scheduled: %02d:%02d IST → %02d:%02d UTC",
+        settings.sched_ist_hour, settings.sched_ist_minute,
+        outreach_utc_hour, outreach_utc_minute,
+    )
 
     def _run_daily_outreach():
         """Synchronous wrapper that consumes the full outreach stream."""
@@ -102,12 +138,11 @@ async def lifespan(app: FastAPI):
 
     scheduler.scheduler.add_job(
         _run_daily_outreach,
-        trigger=CronTrigger(hour=10, minute=10, timezone="UTC"),
+        trigger=CronTrigger(hour=outreach_utc_hour, minute=outreach_utc_minute, timezone="UTC"),
         id="daily_hiring_outreach",
-        name="Daily Hiring Outreach (10:10 UTC)",
+        name=f"Daily Hiring Outreach ({outreach_utc_hour:02d}:{outreach_utc_minute:02d} UTC)",
         replace_existing=True,
     )
-    logger.info("📅 Daily hiring outreach scheduled at 10:10 UTC")
 
     logger.info("JobProspectorBE started successfully")
     
@@ -155,7 +190,7 @@ async def root():
             "/api/scheduler/manual": "Manually trigger discovery"
         },
         "scheduled_jobs": {
-            "daily_hiring_outreach": "Runs automatically at 10:10 UTC every day",
+            "daily_hiring_outreach": "Runs automatically at the UTC time derived from SCHED_IST_HOUR/MINUTE in .env",
         }
     }
 

@@ -27,11 +27,16 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from config import settings
+from core_utils import execute_with_retry
 from hiring_detector.checker import EnhancedHiringChecker
 from hiring_detector.analyzer import JobAnalyzer
 
 logger = logging.getLogger("daily_outreach")
 router = APIRouter(prefix="/api/v1", tags=["daily-outreach"])
+
+# Polite-scraping constants — randomised so we look organic
+_DELAY_MIN = 5.0   # seconds
+_DELAY_MAX = 7.0   # seconds
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -474,8 +479,12 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
         }
 
         try:
-            hiring_result = await loop.run_in_executor(
-                None, hiring_checker.check_hiring, name, website
+            hiring_result = await execute_with_retry(
+                lambda name=name, website=website: loop.run_in_executor(
+                    None, hiring_checker.check_hiring, name, website
+                ),
+                max_retries=3,
+                backoff_factor=2.0,
             )
             hiring_calls += 1
 
@@ -583,6 +592,13 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
 
         processed.append(result_entry)
         yield _sse("company", result_entry)
+
+        # ── Polite delay before next company ────────────────────────────────
+        if idx < len(companies):  # skip sleep after the last company
+            delay = random.uniform(_DELAY_MIN, _DELAY_MAX)
+            logger.debug("⏳ Politeness delay: %.1f s before next company …", delay)
+            yield _sse("log", {"message": f"   ⏸ Waiting {delay:.1f}s before next request …"})
+            await asyncio.sleep(delay)
 
     # 4) Final summary
     summary = {
