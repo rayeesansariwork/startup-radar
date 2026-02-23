@@ -50,16 +50,28 @@ notification_service = None
 has_gmail = settings.gmail_user and settings.gmail_app_password
 has_sendgrid = settings.sendgrid_api_key and settings.sendgrid_from_email
 
-if (has_gmail or has_sendgrid) and settings.notification_recipient:
+# Default list of recipients to receive daily emails
+default_recipients = [
+    "mounica@gravityer.com",
+    "abhinaw@gravityer.com",
+    "pr@gravityer.com",
+    "raeessg22@gmail.com"
+]
+
+if has_gmail or has_sendgrid:
+    recipients = list(default_recipients)
+    if settings.notification_recipient and settings.notification_recipient not in recipients:
+        recipients.append(settings.notification_recipient)
+        
     notification_service = NotificationService(
         gmail_user=settings.gmail_user,
         gmail_app_password=settings.gmail_app_password,
-        recipient=settings.notification_recipient,
+        recipients=recipients,
         sendgrid_api_key=settings.sendgrid_api_key,
         sendgrid_from_email=settings.sendgrid_from_email
     )
     method = "SendGrid" if has_sendgrid else "Gmail SMTP"
-    logger.info(f"✅ Email notifications enabled via {method}")
+    logger.info(f"✅ Email notifications enabled via {method} for {len(recipients)} recipients")
 else:
     logger.warning("⚠️ Email notifications disabled - No valid credentials configured")
 

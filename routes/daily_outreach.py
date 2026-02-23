@@ -197,7 +197,7 @@ def _detect_team(company: dict) -> str:
     return "Engineering"
 
 
-SIGNATURE = "\n\nBest regards,\nGravity Team\ninfo@gravityer.com"
+SIGNATURE = "\n\nBest regards,\nGravity Team\nRayees@gravityer.com"
 
 
 # ─── C-suite contact simulation ─────────────────────────────────────────────
@@ -320,7 +320,7 @@ def generate_mail(
             f"No recruitment fees, no long contracts — just great engineers "
             f"at a fraction of local hiring costs.\n\n"
             f"Worth a quick 15-min chat? Just reply here or reach out at "
-            f"info@gravityer.com."
+            f"Rayees@gravityer.com."
             f"{SIGNATURE}"
         )
 
@@ -348,7 +348,7 @@ def generate_mail(
             f"We handle sourcing, vetting, and onboarding — you get a "
             f"full-time engineer embedded in your team within days, not months.\n\n"
             f"Would love a quick chat to see if we can help. "
-            f"Reply here or reach out at info@gravityer.com."
+            f"Reply here or reach out at Rayees@gravityer.com."
             f"{SIGNATURE}"
         )
 
@@ -382,7 +382,7 @@ def generate_mail(
             f"directly with your team — at a fraction of local hiring costs. Whether "
             f"you need 1 engineer or 10, we can move in days, not months.\n\n"
             f"Would love to have a quick chat to see if there's a fit. "
-            f"Just reply here or reach out at info@gravityer.com."
+            f"Just reply here or reach out at Rayees@gravityer.com."
             f"{SIGNATURE}"
         )
 

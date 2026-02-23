@@ -4,7 +4,8 @@ Enhanced Mistral AI analyzer for extracting job information
 
 import logging
 import json
-from typing import List, Dict
+import re
+from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -14,31 +15,80 @@ try:
 except ImportError:
     MISTRAL_AVAILABLE = False
 
+# Map role keywords to team labels used in outreach copy
+ROLE_TEAM_MAP = [
+    (["machine learning", "ml ", "data scientist", "ai ", "nlp", "llm"], "ML/AI"),
+    (["data engineer", "data analyst", "analytics", "bi ", "etl"], "Data"),
+    (["devops", "sre", "platform engineer", "infrastructure", "cloud", "kubernetes", "terraform"], "DevOps/Platform"),
+    (["backend", "back-end", "api", "python", "java ", "golang", "node", "ruby", "scala"], "Backend Engineering"),
+    (["frontend", "front-end", "react", "vue", "angular", "ui engineer"], "Frontend Engineering"),
+    (["full stack", "fullstack"], "Full-Stack Engineering"),
+    (["mobile", "ios", "android", "flutter", "react native"], "Mobile Engineering"),
+    (["security", "cybersecurity", "appsec", "devsecops"], "Security Engineering"),
+    (["product manager", "product owner", "program manager"], "Product"),
+    (["qa", "quality assurance", "test engineer", "sdet"], "QA/Testing"),
+]
+
+
+def _infer_team(job_roles: List[str]) -> str:
+    """Infer the dominant hiring team from job titles."""
+    roles_lower = " ".join(job_roles).lower()
+    scores: Dict[str, int] = {}
+    for keywords, team in ROLE_TEAM_MAP:
+        score = sum(1 for kw in keywords if kw in roles_lower)
+        if score:
+            scores[team] = scores.get(team, 0) + score
+    if not scores:
+        return "Engineering"
+    return max(scores, key=scores.get)
+
+
+def _clean_body(text: str) -> str:
+    """Strip em-dashes, smart quotes, and other characters that make emails look AI-generated."""
+    replacements = {
+        "\u2014": "-",   # em dash
+        "\u2013": "-",   # en dash
+        "\u2018": "'",   # left single quote
+        "\u2019": "'",   # right single quote
+        "\u201c": '"',   # left double quote
+        "\u201d": '"',   # right double quote
+        "\u2026": "...", # ellipsis
+    }
+    for char, replacement in replacements.items():
+        text = text.replace(char, replacement)
+    return text.strip()
+
+
+def _parse_json_response(text: str) -> dict:
+    """Robustly strip markdown fences and parse JSON from an LLM response."""
+    # Strip ```json ... ``` or ``` ... ```
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    text = text.replace("```", "").strip()
+    return json.loads(text)
+
 
 class JobAnalyzer:
     """Analyze text/HTML to extract job information using Mistral AI"""
-    
+
     def __init__(self, mistral_api_key: str):
         if not MISTRAL_AVAILABLE:
             raise ImportError("Mistral package not installed")
-        
         self.mistral = Mistral(api_key=mistral_api_key)
-    
+
     def analyze_career_page(self, text: str, company_name: str) -> Dict:
         """
-        Analyze career page text to extract job information
-        
+        Analyze career page text to extract job information.
+
         Args:
             text: Page text content
             company_name: Company name for context
-        
+
         Returns:
             Dict with is_hiring, job_roles, hiring_summary
         """
         try:
-            # Truncate text to avoid token limits
             text = text[:10000]
-            
+
             prompt = f"""Analyze this career page content from {company_name} and extract job information.
 
 Content:
@@ -56,10 +106,10 @@ Return ONLY valid JSON in this exact format:
   "hiring_summary": "brief summary here"
 }}
 
-Important:
-- Only include REAL job titles you find
+Rules:
+- Only include REAL job titles you find in the content
 - If you see "No open positions" or similar, set is_hiring to false
-- Be specific with job titles (e.g., "Senior Software Engineer" not just "Engineer")
+- Be specific (e.g., "Senior Software Engineer" not just "Engineer")
 - Include up to 20 job titles maximum
 """
 
@@ -69,31 +119,20 @@ Important:
                 temperature=0.1,
                 max_tokens=1000
             )
-            
+
             result_text = response.choices[0].message.content.strip()
-            
-            # Clean markdown formatting
-            if '```json' in result_text:
-                result_text = result_text.split('```json')[1].split('```')[0]
-            elif '```' in result_text:
-                result_text = result_text.split('```')[1].split('```')[0]
-            
-            result_text = result_text.strip()
-            
-            # Parse JSON
-            data = json.loads(result_text)
-            
+            data = _parse_json_response(result_text)
+
             logger.info(f"✅ Mistral analysis: {len(data.get('job_roles', []))} jobs found")
-            
+
             return {
                 'is_hiring': data.get('is_hiring', False),
-                'job_roles': data.get('job_roles', [])[:20],  # Limit to 20
-                'hiring_summary': data.get('hiring_summary', '')[:200]  # Limit to 200 chars
+                'job_roles': data.get('job_roles', [])[:20],
+                'hiring_summary': data.get('hiring_summary', '')[:200]
             }
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"Mistral returned invalid JSON: {e}")
-            logger.debug(f"Response was: {result_text[:500]}")
             return {
                 'is_hiring': False,
                 'job_roles': [],
@@ -106,17 +145,17 @@ Important:
                 'job_roles': [],
                 'hiring_summary': f'Error: {str(e)}'
             }
-    
+
     def analyze_job_list(self, job_titles: List[str], company_name: str) -> Dict:
         """
-        Analyze a list of job titles to clean and categorize
-        
+        Clean and categorize a raw list of job titles.
+
         Args:
             job_titles: List of potential job titles
             company_name: Company name
-        
+
         Returns:
-            Dict with cleaned job_roles
+            Dict with is_hiring, job_roles, hiring_summary
         """
         if not job_titles:
             return {
@@ -124,7 +163,7 @@ Important:
                 'job_roles': [],
                 'hiring_summary': 'No jobs found'
             }
-        
+
         try:
             prompt = f"""Given these potential job titles from {company_name}, clean and filter them.
 
@@ -133,8 +172,8 @@ Raw titles:
 
 Tasks:
 1. Remove duplicates
-2. Remove non-job entries (like "About Us", "FAQ", etc.)
-3. Standardize formatting
+2. Remove non-job entries (e.g., "About Us", "FAQ", navigation labels)
+3. Standardize formatting (proper title case)
 4. Keep only real job titles
 
 Return ONLY a JSON array of cleaned job titles:
@@ -147,24 +186,16 @@ Return ONLY a JSON array of cleaned job titles:
                 temperature=0.1,
                 max_tokens=500
             )
-            
+
             result_text = response.choices[0].message.content.strip()
-            
-            # Clean markdown
-            if '```' in result_text:
-                result_text = result_text.split('```')[1] if '```' in result_text else result_text
-                if 'json' in result_text[:10].lower():
-                    result_text = result_text[4:]
-                result_text = result_text.replace('```', '').strip()
-            
-            cleaned_jobs = json.loads(result_text)
-            
+            cleaned_jobs = _parse_json_response(result_text)
+
             return {
                 'is_hiring': len(cleaned_jobs) > 0,
                 'job_roles': cleaned_jobs[:20],
                 'hiring_summary': f"Found {len(cleaned_jobs)} open positions"
             }
-            
+
         except Exception as e:
             logger.error(f"Job list analysis failed: {e}")
             return {
@@ -173,72 +204,131 @@ Return ONLY a JSON array of cleaned job titles:
                 'hiring_summary': f"Found {len(job_titles)} potential positions"
             }
 
-    def generate_outreach_mail(self, company_name: str, job_roles: List[str], funding_info: str = None) -> Dict:
+    def generate_outreach_mail(
+        self,
+        company_name: str,
+        job_roles: List[str],
+        funding_info: Optional[str] = None,
+        sender_email: str = "shilpibhatiya@gravityer.com",
+        max_retries: int = 2
+    ) -> Optional[Dict]:
         """
-        Generate a personalized outreach email for a hiring company using Mistral AI.
+        Generate a personalized outreach email for a hiring company.
 
         Args:
             company_name: Name of the company
             job_roles: List of job titles they are hiring for
-            funding_info: Optional funding information
+            funding_info: Optional funding information (e.g. "Series B, $20M")
+            sender_email: Rayees' actual email address for the CTA
+            max_retries: How many times to retry on JSON parse failure
 
         Returns:
-            Dict with subject, body, to_hint fields
+            Dict with subject, body, team_focus — or None on failure
         """
         if not job_roles:
             return None
 
-        try:
-            # Identify the dominant hiring category
-            roles_text = ", ".join(job_roles[:10])
+        team_focus = _infer_team(job_roles)
+        roles_sample = ", ".join(job_roles[:6])  # keep prompt concise
 
-            prompt = f"""Generate a short, professional B2B cold outreach email for a staffing company called Gravity (info@gravityer.com) to send to {company_name}.
+        # Build the funding line only when real data exists
+        if funding_info:
+            funding_line = f"They recently received funding ({funding_info}) and are scaling fast."
+        else:
+            funding_line = "They are actively scaling their team."
+
+        # Funding congratulations line — only when we have real data
+        if funding_info:
+            funding_congrats = f"Congrats on the {funding_info}. I am really happy to see your growth."
+        else:
+            funding_congrats = "You guys are doing great work and the growth is clearly showing."
+
+        prompt = f"""Write a warm B2B cold outreach email from Shilpi Bhatia (Senior BDM, Gravity Engineering Services) to a hiring contact at {company_name}.
+
+Follow this EXACT structure and tone. Fill in the bracketed parts with real values from the context below. Do not change the sentence structure -- only swap in the right details.
+
+--- TEMPLATE ---
+Hey [first name if known, else omit the greeting line],
+
+I have been following {company_name} for a while now. You guys are doing great work. {funding_congrats} I was checking your careers page and LinkedIn and I saw that you are hiring {roles_sample}. You already know how high the market rates are for these roles.
+
+We can provide the same level of talent at a much lower cost. We place pre-vetted engineers into your team full time, remote or onsite, based on what works best for you. They plug into your workflow and start contributing fast.
+
+If this helps your hiring plans, I would love to support your growth. We can provide the right resources based on your needs and budget. If you want to discuss this, please book a slot here: https://calendly.com/shilpibhatia-gravity/30min
+--- END TEMPLATE ---
 
 Context:
-- {company_name} is actively hiring for these roles: {roles_text}
-- {"They recently received funding: " + funding_info if funding_info else "They appear to have recently received funding."}
-- Gravity provides cost-effective staff augmentation for tech/engineering roles.
+- Company: {company_name}
+- Hiring for ({team_focus}): {roles_sample}
+- {funding_line}
 
-Rules:
-- Keep it under 120 words.
-- Tone: confident, warm, not pushy.
-- Mention the specific team/department they are scaling (infer from the job roles — e.g. "Backend Engineering", "Sales", "Data" etc.)
-- Do NOT use placeholder brackets like [Name].
-- End with a soft CTA to reply or reach out to info@gravityer.com.
+Hard rules:
+- Keep the tone exactly as shown: warm, human, conversational. Not salesy.
+- Do NOT add extra paragraphs, bullet points, or marketing language
+- Do NOT use em dashes or smart quotes
+- Do NOT fabricate facts beyond what is given
+- If no recipient first name is available, start directly with "I have been following..."
+- Keep word count between 100-130 words (body only, excluding signature)
 
-Return ONLY valid JSON:
+Return ONLY valid JSON, no markdown fences:
 {{
-  "subject": "email subject line",
-  "body": "full email body text",
-  "team_focus": "the main department/team they are scaling"
+  "subject": "specific subject line referencing {company_name} and the role type (max 10 words)",
+  "body": "full email body with \\n\\n between paragraphs",
+  "team_focus": "{team_focus}"
 }}"""
 
-            response = self.mistral.chat.complete(
-                model="mistral-large-latest",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=500
-            )
+        for attempt in range(max_retries + 1):
+            try:
+                response = self.mistral.chat.complete(
+                    model="mistral-large-latest",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.65,
+                    max_tokens=600
+                )
 
-            result_text = response.choices[0].message.content.strip()
+                result_text = response.choices[0].message.content.strip()
+                data = _parse_json_response(result_text)
 
-            # Clean markdown formatting
-            if '```json' in result_text:
-                result_text = result_text.split('```json')[1].split('```')[0]
-            elif '```' in result_text:
-                result_text = result_text.split('```')[1].split('```')[0]
+                body = _clean_body(data.get('body', ''))
+                subject = _clean_body(data.get('subject', ''))
 
-            result_text = result_text.strip()
-            data = json.loads(result_text)
+                # Ensure signature is always present and correctly formatted
+                cta_banner = (
+                    '\n\n<a href="https://calendly.com/shilpibhatia-gravity/30min" target="_blank">'
+                    '<img src="https://ci3.googleusercontent.com/mail-sig/AIorK4zzPing2FyYjR1YFA-fvADgwE2cUWzzqE3RXGzQjp5AKHwa7Prc33GyN-XnlAjsCkWjxa_f7p2rlRNd" '
+                    'width="100" height="29" alt="Book a meeting with Gravity Engineering" '
+                    'style="display:block;border:none;" /></a>'
+                )
+                signature = (
+                    "\n\nShilpi Bhatia\n"
+                    "Senior BDM\n"
+                    "Gravity Engineering Services Pvt Ltd.\n"
+                    "shilpibhatiya@gravityer.com"
+                )
+                # Strip any partial signature the LLM may have appended, then re-add ours
+                for marker in ["Shilpi Bhatia", "Senior BDM", "Gravity Engineering"]:
+                    if marker in body:
+                        body = body[:body.index(marker)].rstrip()
+                        break
+                body = body + signature + cta_banner 
 
-            logger.info(f"✉️ Outreach mail generated for {company_name} (focus: {data.get('team_focus', 'N/A')})")
+                if not body or not subject:
+                    raise ValueError("Empty subject or body in response")
 
-            return {
-                'subject': data.get('subject', ''),
-                'body': data.get('body', ''),
-                'team_focus': data.get('team_focus', ''),
-            }
+                logger.info(f"✉️ Outreach mail generated for {company_name} (team: {team_focus})")
 
-        except Exception as e:
-            logger.error(f"Mail generation failed for {company_name}: {e}")
-            return None
+                return {
+                    'subject': subject,
+                    'body': body,
+                    'team_focus': team_focus,
+                }
+
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Attempt {attempt + 1} failed for {company_name}: {e}")
+                if attempt == max_retries:
+                    logger.error(f"Mail generation failed after {max_retries + 1} attempts for {company_name}")
+                    return None
+
+            except Exception as e:
+                logger.error(f"Mail generation failed for {company_name}: {e}")
+                return None

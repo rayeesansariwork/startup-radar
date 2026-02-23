@@ -24,12 +24,15 @@ class NotificationService:
         gmail_app_password: Optional[str] = None, 
         recipient: Optional[str] = None,
         sendgrid_api_key: Optional[str] = None,
-        sendgrid_from_email: Optional[str] = None
+        sendgrid_from_email: Optional[str] = None,
+        recipients: Optional[List[str]] = None
     ):
         """
         Initialize notification service with SendGrid or Gmail SMTP
         """
-        self.recipient = recipient
+        self.recipients = recipients or []
+        if recipient and recipient not in self.recipients:
+            self.recipients.append(recipient)
         
         # SendGrid Configuration
         self.sendgrid_api_key = sendgrid_api_key
@@ -86,11 +89,11 @@ class NotificationService:
             # 1. Try SendGrid first if configured
             if self.sendgrid_api_key and self.sendgrid_from_email:
                 try:
-                    logger.info(f"[Notification] Sending email via SendGrid to {self.recipient}...")
+                    logger.info(f"[Notification] Sending email via SendGrid to {', '.join(self.recipients)}...")
                     sg = SendGridAPIClient(self.sendgrid_api_key)
                     message = Mail(
                         from_email=self.sendgrid_from_email,
-                        to_emails=self.recipient,
+                        to_emails=self.recipients,
                         subject=subject,
                         html_content=html_body
                     )
@@ -110,14 +113,14 @@ class NotificationService:
             message = MIMEMultipart('alternative')
             message['Subject'] = subject
             message['From'] = self.gmail_user
-            message['To'] = self.recipient
+            message['To'] = ", ".join(self.recipients)
             
             # Attach HTML body
             html_part = MIMEText(html_body, 'html')
             message.attach(html_part)
             
             # Try sending email via Gmail SMTP with fallback
-            logger.info(f"[Notification] Sending email via Gmail SMTP to {self.recipient}...")
+            logger.info(f"[Notification] Sending email via Gmail SMTP to {', '.join(self.recipients)}...")
             
             # Try TLS first (port 587)
             try:
