@@ -231,6 +231,36 @@ class EnhancedHiringChecker:
     def _try_mistral_analysis(self, company_name: str, career_url: str) -> Dict:
         """Layer 4: Mistral AI analysis (fallback)"""
         try:
+            # If career_url is an ATS page, try the platform API directly
+            # (plain HTTP GET on SPA shells returns no job content)
+            platform = PlatformDetector.detect_platform("", career_url)
+            if platform:
+                token = PlatformDetector.extract_company_token("", career_url)
+                if token:
+                    if platform == 'ashby':
+                        jobs = PlatformDetector.get_ashby_jobs(token)
+                    elif platform == 'greenhouse':
+                        jobs = PlatformDetector.get_greenhouse_jobs(token)
+                    elif platform == 'lever':
+                        jobs = PlatformDetector.get_lever_jobs(token)
+                    else:
+                        jobs = []
+                    # Only use results that have real job data (not requires_scraping stubs)
+                    if jobs and not jobs[0].get('requires_scraping'):
+                        job_titles = [j['title'] for j in jobs if j.get('title')]
+                        if job_titles:
+                            logger.info(
+                                f"✅ Layer 4 ATS recovery: {len(job_titles)} jobs via {platform} API"
+                            )
+                            return {
+                                'is_hiring': True,
+                                'career_page_url': career_url,
+                                'job_roles': job_titles,
+                                'job_count': len(job_titles),
+                                'hiring_summary': f"Found {len(job_titles)} positions via {platform} API",
+                                'detection_method': f'{platform} API (Layer 4 recovery)',
+                            }
+
             # Try simple HTTP request
             response = requests.get(career_url, timeout=10)
             

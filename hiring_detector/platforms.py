@@ -119,28 +119,61 @@ class PlatformDetector:
     @staticmethod
     def get_ashby_jobs(company_name: str) -> List[Dict]:
         """
-        Fetch jobs from Ashby (job board page scraping required)
+        Fetch jobs from Ashby via their public GraphQL API.
         
         Args:
-            company_name: Company slug
+            company_name: Company slug (e.g., 'benepass')
         
         Returns:
-            List of job dicts
+            List of job dicts with title, department, url, platform
         """
         try:
-            url = f"https://jobs.ashbyhq.com/{company_name}"
+            api_url = "https://jobs.ashbyhq.com/api/non-user-graphql"
             
-            logger.info(f"Checking Ashby: {url}")
-            response = requests.get(url, timeout=10)
+            logger.info(f"Checking Ashby: https://jobs.ashbyhq.com/{company_name}")
+            
+            query = {
+                "operationName": "ApiJobBoardWithTeams",
+                "variables": {"organizationHostedJobsPageName": company_name},
+                "query": (
+                    "query ApiJobBoardWithTeams($organizationHostedJobsPageName: String!) {"
+                    "  jobBoard: jobBoardWithTeams(organizationHostedJobsPageName: $organizationHostedJobsPageName) {"
+                    "    teams { ... on JobBoardTeam { name jobs { id title } } }"
+                    "  }"
+                    "}"
+                ),
+            }
+            
+            response = requests.post(api_url, json=query, timeout=10)
             
             if response.status_code == 200:
-                # Ashby requires scraping - return URL for Playwright layer
-                return [{'platform': 'Ashby', 'requires_scraping': True, 'url': url}]
+                data = response.json()
+                job_board = data.get("data", {}).get("jobBoard")
+                teams = (job_board or {}).get("teams", [])
+                
+                # Handle null jobBoard (company not found on Ashby)
+                if not teams:
+                    return []
+                
+                results = []
+                for team in teams:
+                    for job in team.get("jobs", []):
+                        results.append({
+                            "title": job.get("title"),
+                            "department": team.get("name"),
+                            "url": f"https://jobs.ashbyhq.com/{company_name}/{job.get('id', '')}",
+                            "platform": "Ashby",
+                        })
+                
+                if results:
+                    logger.info(f"✅ Ashby API: Found {len(results)} jobs")
+                return results
             else:
+                logger.warning(f"Ashby API returned {response.status_code}")
                 return []
                 
         except Exception as e:
-            logger.error(f"Ashby check error: {e}")
+            logger.error(f"Ashby API error: {e}")
             return []
     
     @staticmethod

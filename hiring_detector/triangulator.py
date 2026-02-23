@@ -118,10 +118,22 @@ class HiringTriangulator:
         query = f'site:greenhouse.io OR site:lever.co OR site:ashbyhq.com "{company}"'
         results = self._search_serper(query, num=5)
 
+        company_lower = company.lower()
+
         for r in results:
             link = r.get("link", "")
             if any(ats in link for ats in ATS_PROVIDERS):
-                return link, "ATS_Backdoor"
+                # Validate the URL actually belongs to this company
+                from urllib.parse import urlparse
+                parsed = urlparse(link)
+                path = parsed.path.lower().strip("/")
+                host = parsed.netloc.lower()
+                if company_lower in path or company_lower in host:
+                    return link, "ATS_Backdoor"
+                else:
+                    logger.debug(
+                        "Skipping ATS link (wrong company): %s", link
+                    )
 
         return None, None
 

@@ -1,356 +1,439 @@
-# context.md
+# context.md — JobProspectorBE
+
+> **Last updated:** 2026-02-20  
+> **Purpose:** Complete technical reference for any LLM or developer working on this project.  
+> Keep this file updated whenever new features are added.
+
+---
 
 ## 1. Project Overview
-**Goal:** Build a production-ready, automated "Hiring Signal" detector.
-**Purpose:** B2B Lead Generation. We need to identify if a specific company (by domain) is actively hiring for engineering/tech roles to pitch them services.
-**Core Philosophy:** "Intelligence over Brute Force." Instead of blindly scraping complex corporate homepages, we triangulate the specific "Careers" page or third-party Applicant Tracking System (ATS) URL using search APIs and sitemaps.
 
-## 2. Technical Constraints & Requirements
-* **Environment:** Production Linux Server (e.g., AWS, DigitalOcean).
-* **Language:** Python 3.x.
-* **Dependencies:** `requests`, `beautifulsoup4`, `google-search-results` (or generic `requests` for Serper.dev).
-* **Restriction:** **Avoid Headless Browsers (Playwright/Selenium)** if possible. They are resource-heavy and prone to crashing in production. Use them only as a last resort.
-* **Ethics:** Must respect rate limits, use randomized sleep delays, and rotate User-Agents to avoid IP bans.
+**What it is:** A production-ready, automated B2B lead-generation engine.  
+**Goal:** Identify companies that (a) recently received funding and (b) are actively hiring tech/engineering talent, then generate personalized cold-outreach emails for each.
 
-## 3. The "Triangulation" Strategy (The Intelligence Layer)
-To detect hiring without getting blocked, the system follows this strict hierarchy:
+**Core philosophy:** *"Intelligence over Brute Force."* Instead of blindly crawling homepages, the system triangulates career pages via ATS backdoors, sitemaps, and targeted Serper searches — minimizing bandwidth, latency, and IP-ban risk.
 
-### Priority 1: The ATS Backdoor (High Success, Low Risk)
-Most tech companies host jobs on external domains which are easier to scrape and rarely block bots.
-* **Target:** `boards.greenhouse.io`, `jobs.lever.co`, `jobs.ashbyhq.com`, `apply.workable.com`.
-* **Action:** Use Google Search (Serper.dev) to find these specifically for the target domain (e.g., `site:greenhouse.io "openai"`).
-
-### Priority 2: The Sitemap Surgeon (Polite Discovery)
-* **Target:** `domain.com/sitemap.xml`
-* **Action:** Parse the XML to find URLs containing "careers", "jobs", or "join-us". This is "white-hat" and extremely reliable.
-
-### Priority 3: The Organic Search (Fallback)
-* **Action:** If 1 & 2 fail, search Google for `site:domain.com (careers OR jobs)`.
-* **Risk:** Higher chance of parsing errors due to custom HTML/JS on the main site.
-
-## 4. Implementation Code (`HiringDetective`)
-Below is the complete, robust Python implementation. Any LLM working on this project must preserve this logic.
-
-```python
-import requests
-import json
-import time
-import random
-import re
-from bs4 import BeautifulSoup
-
-# --- CONFIGURATION ---
-SERPER_API_KEY = "YOUR_KEY_HERE"
-
-# Known ATS domains that are easy to scrape (The "Backdoor")
-ATS_PROVIDERS = {
-    "greenhouse.io": "Greenhouse",
-    "boards.greenhouse.io": "Greenhouse",
-    "jobs.lever.co": "Lever",
-    "lever.co": "Lever",
-    "ashbyhq.com": "Ashby",
-    "workable.com": "Workable",
-    "breezy.hr": "Breezy"
-}
-
-# Rotate User Agents to avoid simple IP blocks
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.5112.79 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36'
-]
-
-class HiringDetective:
-    def __init__(self, api_key):
-        self.api_key = api_key
-        self.session = requests.Session()
-        
-    def _get_headers(self):
-        return {
-            'User-Agent': random.choice(USER_AGENTS),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive',
-        }
-
-    def _sleep(self, min_s=3, max_s=7):
-        """Randomized sleep to act human."""
-        time.sleep(random.uniform(min_s, max_s))
-
-    def search_serper(self, query):
-        """Queries Google via Serper.dev"""
-        url = "[https://google.serper.dev/search](https://google.serper.dev/search)"
-        payload = json.dumps({"q": query, "num": 5})
-        headers = {'X-API-KEY': self.api_key, 'Content-Type': 'application/json'}
-        try:
-            res = requests.post(url, headers=headers, data=payload)
-            return res.json().get('organic', [])
-        except:
-            return []
-
-    # --- STRATEGY 1: FIND ATS ---
-    def find_ats_url(self, domain):
-        company = domain.split('.')[0]
-        # "Smart" Query: Look for the company on specific ATS domains
-        query = f'site:greenhouse.io OR site:lever.co OR site:ashbyhq.com "{company}"'
-        results = self.search_serper(query)
-        for r in results:
-            if any(ats in r['link'] for ats in ATS_PROVIDERS):
-                return r['link'], "ATS_Backdoor"
-        return None, None
-
-    # --- STRATEGY 2: CHECK SITEMAP ---
-    def check_sitemap(self, domain):
-        try:
-            sitemap_url = f"https://{domain}/sitemap.xml"
-            res = self.session.get(sitemap_url, headers=self._get_headers(), timeout=10)
-            if res.status_code == 200:
-                urls = re.findall(r'<loc>(.*?)</loc>', res.text)
-                for u in urls:
-                    if 'career' in u or 'jobs' in u:
-                        return u, "Sitemap_Discovery"
-        except:
-            pass
-        return None, None
-
-    # --- STRATEGY 3: FALLBACK SEARCH ---
-    def find_generic_url(self, domain):
-        results = self.search_serper(f'site:{domain} (careers OR jobs)')
-        if results:
-            return results[0]['link'], "Google_Organic"
-        return None, None
-
-    # --- ANALYSIS ENGINE ---
-    def analyze_hiring(self, url):
-        self._sleep()
-        try:
-            res = self.session.get(url, headers=self._get_headers(), timeout=15)
-            soup = BeautifulSoup(res.text, 'html.parser')
-            text = soup.get_text().lower()
-            
-            # Simple Heuristics
-            keywords = ['engineer', 'developer', 'data scientist', 'product manager']
-            jobs_found = []
-            
-            # Check for ATS-specific structures (e.g. div.opening) or generic links
-            links = soup.find_all('a', href=True)
-            for link in links:
-                ltext = link.get_text(" ", strip=True)
-                if 5 < len(ltext) < 50 and any(k in ltext.lower() for k in keywords):
-                    jobs_found.append(ltext)
-            
-            is_hiring = len(jobs_found) > 0 or "open positions" in text
-            return {
-                "hiring": is_hiring,
-                "url": url,
-                "jobs_preview": list(set(jobs_found))[:5]
-            }
-        except Exception as e:
-            return {"hiring": False, "error": str(e)}
-
-    # --- MAIN RUNNER ---
-    def investigate(self, domain):
-        # 1. Try ATS
-        url, method = self.find_ats_url(domain)
-        # 2. Try Sitemap
-        if not url: url, method = self.check_sitemap(domain)
-        # 3. Try Generic
-        if not url: url, method = self.find_generic_url(domain)
-        
-        if url:
-            print(f"Found Career Page via {method}: {url}")
-            return self.analyze_hiring(url)
-        return {"hiring": False, "error": "No URL found"}
-
-
-
-
-
-# Deployment Instructions for you
-# If asking another LLM to modify or extend this:
-
-# Do NOT remove the randomized sleep (Safety).
-
-# Do NOT replace requests with selenium unless explicitly asked (Complexity).
-
-# Focus on improving the ATS_PROVIDERS list or the regex logic in analyze_hiring.
-
-# Always prefer the "Search First" approach over "Crawl All" approach.
+**Tech stack:**
+| Layer | Technology |
+|---|---|
+| Runtime | Python 3.x |
+| API server | FastAPI (async, `uvicorn`) |
+| Scraping | `requests` + `beautifulsoup4`, Playwright (last resort) |
+| AI | Mistral AI (`mistral-large-latest`) |
+| Search | Serper.dev (Google Search API) |
+| Scheduler | APScheduler (cron + interval) |
+| Config | `pydantic-settings` via `.env` |
+| Persistence | SalesTechBE REST API (Django) |
 
 ---
 
-## 5. Implemented: Triangulation Strategy (`HiringTriangulator`)
-The triangulation strategy from the `HiringDetective` above has been implemented in `hiring_detector/triangulator.py` and integrated into the `EnhancedHiringChecker`.
+## 2. Project Layout
 
-### How It Works
-When `EnhancedHiringChecker._find_career_page()` is called, it now runs `HiringTriangulator.triangulate(domain)` **first**, before falling back to the existing URL pattern-guessing loop.
-
-### Triangulation Hierarchy
-1. **ATS Backdoor** → Serper search: `site:greenhouse.io OR site:lever.co OR site:ashbyhq.com "company"`
-2. **Sitemap Surgeon** → Fetches `domain.com/sitemap.xml`, finds career/jobs URLs via `<loc>` tag regex
-3. **Organic Search** → Serper search: `site:domain (careers OR jobs)`
-
-### Files
-- `hiring_detector/triangulator.py` — `HiringTriangulator` class
-- `hiring_detector/checker.py` — Integration point in `_find_career_page()`
-- `hiring_detector/__init__.py` — Exports both `EnhancedHiringChecker` and `HiringTriangulator`
-
----
-
-## 6. Implemented: Custom Mail Generation
-The `/api/hiring` endpoint now generates a personalized B2B outreach email for every company that `is_hiring: true`.
-
-### How It Works
-After hiring results are collected, the system calls `JobAnalyzer.generate_outreach_mail()` which sends the company name + job roles to Mistral AI. Mistral generates a short, professional cold email from Gravity (info@gravityer.com) mentioning the specific team they're scaling.
-
-### Response Shape
-```json
-{
-  "company_name": "Kavak",
-  "is_hiring": true,
-  "job_roles": ["Senior Back End Engineer", ...],
-  "custom_mail": {
-    "subject": "Scaling your Backend team?",
-    "body": "Hey Kavak team,\n\nFirst of all, congrats on the funding...",
-    "team_focus": "Backend Engineering"
-  },
-  "career_page_url": "...",
-  "hiring_summary": "...",
-  "detection_method": "..."
-}
+```
+JobProspectorBE/
+├── main.py                  # FastAPI app entry point, all routes except daily outreach
+├── config.py                # pydantic-settings: all env vars with defaults
+├── core_utils.py            # apply_windows_asyncio_fix(), execute_with_retry()
+├── daily_outreach.py        # Legacy standalone CLI script (still works)
+├── routes/
+│   └── daily_outreach.py    # SSE streaming endpoint (PRIMARY)
+├── hiring_detector/
+│   ├── checker.py           # EnhancedHiringChecker — 4-layer hiring detector
+│   ├── triangulator.py      # HiringTriangulator — ATS/Sitemap/Serper strategy
+│   ├── analyzer.py          # JobAnalyzer — Mistral AI email + job extraction
+│   ├── platforms.py         # Direct ATS API scrapers (Greenhouse, Lever, Ashby)
+│   └── scraper.py           # Generic career-page HTML scraper
+├── services/
+│   ├── crm_client.py        # CRMClient — JWT auth + company store
+│   ├── company_discovery.py # CompanyDiscoveryService — multi-source company finder
+│   ├── scheduled_discovery.py  # ScheduledDiscoveryService — APScheduler wrapper
+│   ├── notification_service.py # Email notifications (Gmail SMTP / SendGrid)
+│   ├── hiring_page_finder.py   # HiringPageFinderService — Serper + Mistral
+│   ├── serper.py            # Low-level Serper.dev HTTP wrapper
+│   └── scrapers/
+│       ├── base_scraper.py       # BaseScraper ABC
+│       ├── yc_scraper.py         # Y Combinator company list
+│       ├── techcrunch_scraper.py # TechCrunch news RSS
+│       ├── google_news_scraper.py# Google News RSS (funded startups)
+│       ├── venturebeat_scraper.py# VentureBeat RSS
+│       ├── news_api_scraper.py   # NewsAPI.org (optional, 100 req/day free)
+│       ├── f6s_scraper.py        # F6S via Serper (direct scraping blocked)
+│       └── producthunt_scraper.py# Product Hunt
+└── models/
+    └── responses.py         # Pydantic models: HiringInfo, DiscoverResponse, etc.
 ```
 
-### Files
-- `hiring_detector/analyzer.py` — `JobAnalyzer.generate_outreach_mail()` method
-- `models/responses.py` — `custom_mail: Optional[Dict]` field on `HiringInfo`
-- `main.py` — Mail generation wired into `/api/hiring` endpoint
+---
 
-### API Endpoint (Postman)
-**POST** `http://localhost:8001/api/hiring`
-```json
-{
-  "companies": [
-    { "company_name": "Stripe", "website": "stripe.com" }
-  ]
-}
+## 3. Configuration (`.env` / `config.py`)
+
+All config lives in `.env`, read by `pydantic_settings.BaseSettings`.
+
+```ini
+# Required
+SERPER_API_KEY=<your_key>
+MISTRAL_API_KEY=<your_key>
+CRM_EMAIL=rayees@gravityer.com
+CRM_PASSWORD=<pass>
+CRM_BASE_URL=https://salesapi.gravityer.com/api/v1   # default
+
+# Optional notifications
+GMAIL_USER=
+GMAIL_APP_PASSWORD=
+SENDGRID_API_KEY=
+SENDGRID_FROM_EMAIL=
+NOTIFICATION_RECIPIENT=
+
+# Scheduler (times given in IST, auto-converted to UTC at startup)
+DAILY_SCRAPE_HOUR=9      # IST 09:00 → daily company discovery
+DAILY_SCRAPE_MINUTE=0
+SCHED_IST_HOUR=15        # IST 15:40 → daily hiring outreach cron
+SCHED_IST_MINUTE=40
+
+# Limits
+MAX_CONCURRENT_REQUESTS=10
 ```
-Response will include `custom_mail` for each hiring company.
+
+**IST → UTC conversion** happens in `main.py` `lifespan()` using `_ist_to_utc(h, m)` = `(h*60+m - 330) % 1440`.
 
 ---
 
-## 7. Implemented: F6S Funding Source
-Added F6S (`f6s.com/companies/funding`) as a new company discovery source.
+## 4. API Endpoints
 
-### Why Serper-Based
-F6S blocks direct HTTP scraping (returns 405 + CAPTCHA). So this scraper uses Google Search (via Serper) with `site:f6s.com` queries, then Mistral extracts company/funding data from search results.
+### `GET /`
+Health check. Returns list of all available endpoints.
 
-### Search Queries
-- `site:f6s.com/companies funding raised`
-- `site:f6s.com startup funded seed round`
-- `site:f6s.com company "series a" OR "series b" OR "seed" funding`
+### `POST /api/discover`
+Discover recently funded companies from multiple sources and store them in the CRM.  
+- **Sources (enabled by default):** YC Scraper, TechCrunch Scraper  
+- Deduplicates across sources, stores via `CRMClient.store_company()`  
+- Uses `asyncio.Semaphore(10)` for concurrency control
 
-### Files
-- `services/scrapers/f6s_scraper.py` — `F6SScraper` class
-- `services/scrapers/__init__.py` — Exports `F6SScraper`
-- `services/company_discovery.py` — `enable_f6s=True` parameter in `CompanyDiscoveryService`
+### `POST /api/hiring`
+Check hiring status for a list of companies (usually the output of `/api/discover`).  
+- Runs `EnhancedHiringChecker.check_hiring()` per company  
+- For hiring companies with roles, generates an outreach email via `JobAnalyzer.generate_outreach_mail()` (Mistral AI)
 
-### How to Test (Postman)
-**POST** `http://localhost:8001/api/discover`
-```json
-{
-  "query": "funded startups",
-  "limit": 20
-}
-```
-F6S results will appear with `"source": "F6S"` in the response.
+### `POST /api/find-jobs`
+Find and extract job openings from a single company URL.  
+- Uses `HiringPageFinderService.find_hiring_page(url)`: Serper search → scrape → Mistral extraction
 
----
+### `GET /api/v1/daily-hiring-outreach/` ⭐ PRIMARY PIPELINE
+**Server-Sent Events streaming endpoint.** See section 8 for full details.
 
-## 8. Implemented: Daily Hiring Outreach (SSE Streaming Endpoint)
-
-### Purpose
-A combined FastAPI streaming endpoint (`GET /api/v1/daily-hiring-outreach/`) that:
-1. Authenticates with the CRM via JWT
-2. Fetches companies created on a target date (default: yesterday) with `source=ENRICHMENT ENGINE`
-3. Runs hiring detection on each company (same `EnhancedHiringChecker` logic)
-4. **Always** generates a custom outreach email — even if `is_hiring = false`
-5. Streams progress via **Server-Sent Events** (SSE)
-6. Emits a final structured JSON summary
-
-### Key Design Decisions
-- **SSE streaming** — client gets real-time progress (`event: log`, `event: company`) and a final `event: summary`
-- **Pagination fix** — relative `next` URLs (e.g. `/api/v1/companies/?page=2`) are resolved against `http://127.0.0.1:8000` using `urljoin`
-- **Always-generate-mail** — every company gets a `custom_mail`, not just `is_hiring=true` ones
-- **Funding signal keywords**: `raised`, `funding`, `$`, `valuation`, `million`, `billion`, `seed`, `series`
-
-### Query Parameters
+Query params:
 | Param | Default | Description |
 |---|---|---|
-| `date` | yesterday | Target date in `YYYY-MM-DD` |
-| `page_size` | 100 | CRM page size (1–500) |
+| `date` | yesterday | `YYYY-MM-DD` override |
+| `page_size` | 100 | CRM fetch page size (1–500) |
+
+### `GET /api/scheduler/status`
+Returns APScheduler job list and status.
+
+### `POST /api/scheduler/manual`
+Manually trigger company discovery (for testing). Accepts `?limit=50`.
+
+---
+
+## 5. The Triangulation Strategy (`HiringTriangulator`)
+
+File: `hiring_detector/triangulator.py`
+
+Three-layer hierarchy to find career pages without getting blocked:
+
+```
+Priority 1 — ATS Backdoor (HIGH success, LOW risk)
+  → Serper: site:greenhouse.io OR site:lever.co OR site:ashbyhq.com "<company>"
+  → Known ATS domains: greenhouse.io, lever.co, ashbyhq.com, workable.com, breezy.hr
+
+Priority 2 — Sitemap Surgeon (Polite, no Serper quota)
+  → Fetch domain.com/sitemap.xml
+  → Parse <loc> tags for URLs containing "career" or "jobs"
+
+Priority 3 — Organic Search (Fallback)
+  → Serper: site:domain (careers OR jobs)
+```
+
+**Rules for any LLM modifying this:**
+- Do NOT remove randomized sleep (keeps us undetected)
+- Do NOT replace `requests` with Playwright unless explicitly asked
+- Prefer "Search First" over "Crawl All"
+- Extend `ATS_PROVIDERS` dict to add new platforms
+
+---
+
+## 6. Hiring Detection (`EnhancedHiringChecker`)
+
+File: `hiring_detector/checker.py`
+
+Four-layer detection engine:
+1. **Platform APIs** — Direct Greenhouse / Lever / Ashby API calls (fastest, most accurate)
+2. **Career page detection** — Runs `HiringTriangulator`, then scrapes the found URL
+3. **Playwright browser** — Headless browser for JS-heavy sites (last resort; requires `playwright install`)
+4. **Mistral AI analysis** — Passes scraped text to Mistral with structured extraction prompt
+
+Returns:
+```python
+{
+    "is_hiring": bool,
+    "job_count": int,
+    "job_roles": ["Software Engineer", ...],
+    "career_page_url": str,
+    "hiring_summary": str,
+    "detection_method": str   # "Platform_API", "Triangulation", "Playwright", "Mistral"
+}
+```
+
+**Windows asyncio fix:** `core_utils.apply_windows_asyncio_fix()` is called at the very top of `main.py` before any other imports to switch to `ProactorEventLoop` so Playwright can spawn browser subprocesses.
+
+---
+
+## 7. AI Email Generation (`JobAnalyzer`)
+
+File: `hiring_detector/analyzer.py`
+
+Uses Mistral AI (`mistral-large-latest`, `temperature=0.7`).
+
+**Input:** `company_name`, `job_roles: list[str]`, `funding_info: Optional[str]`  
+**Output:**
+```python
+{
+    "subject": str,
+    "body": str,
+    "team_focus": str   # "Backend Engineering", "AI / Data Engineering", etc.
+}
+```
+
+Used by `/api/hiring` and by the daily outreach pipeline for **hiring companies only**. Non-hiring companies get a template email (fast, no API tokens burned).
+
+---
+
+## 8. Daily Hiring Outreach Pipeline ⭐
+
+File: `routes/daily_outreach.py`
+
+### Full pipeline (per run)
+```
+1. Authenticate with SalesTechBE CRM → JWT Bearer token
+2. Fetch companies (source=ENRICHMENT ENGINE, created >= target_date)
+   - Handles pagination via relative `next` URL resolution
+   - Auto-refreshes token on 401
+3. Per company (sequential, 5–7 s polite delay between):
+   a. EnhancedHiringChecker.check_hiring(name, website)    → hiring result
+   b. Email generation:
+      - is_hiring + roles → JobAnalyzer (Mistral AI)        → "mistral_ai"
+      - is_hiring, no roles → template                       → "template"
+      - not hiring → template                                → "template"
+      - AI fails → template fallback                         → "template_fallback"
+   c. find_csuite_contacts(domain, count=3)                 → simulated C-suite contacts
+   d. generate_personalized_mail(company, contacts[0], mail)→ personalized draft
+   e. yield SSE event: "company" with full result
+4. yield SSE event: "summary" { stats + processed_companies[] }
+5. POST processed[] to SalesTechBE /hiring-outreach-results/bulk_create/
+```
 
 ### SSE Event Types
 | Event | Payload | When |
 |---|---|---|
-| `log` | `{"message": "..."}` | Progress/debug messages |
-| `company` | `{company_name, is_hiring, custom_mail, ...}` | After each company is processed |
-| `summary` | Full JSON summary with `processed_companies` array | Final event |
+| `log` | `{"message": "..."}` | Every step — real-time progress |
+| `company` | Full company result dict | After each company processed |
+| `summary` | Stats + all processed companies | Last event sent |
 
-### Files
-- `routes/daily_outreach.py` — SSE streaming endpoint + all logic
-- `routes/__init__.py` — Package init
-- `main.py` — Registers router via `app.include_router()`
-- `daily_outreach.py` — Legacy standalone CLI script (still works independently)
-
-## 9. Implemented: C-Suite Contact Lookup & Personalized Email Drafts
-
-### Purpose
-After generating a base outreach email for each company, the pipeline now:
-1. **Finds C-suite contacts** — uses the company domain to discover 2–3 executive-level emails (CEO, CTO, VP Engineering, COO, VP Sales)
-2. **Personalizes the email** — re-addresses the email body to the first (highest-priority) found contact, replacing the generic "Hi {Company} team" with "Hi {FirstName}"
-3. **Streams contact details via SSE** — `found_contacts` and `personalized_email` are included in each `company` event
-
-### Contact Simulation (Dummy Mode)
-Currently uses **deterministic dummy data** (no real API calls) via `find_csuite_contacts()`:
-- Hash-seeded from domain → same domain always returns the same contacts
-- Realistic name pools per C-level title
-- Common email patterns: `firstname@domain`, `first.last@domain`, `flast@domain`
-
-> **To switch to real enrichment:** Replace `find_csuite_contacts()` with a call to Apollo.io, RocketReach, or similar. The function signature stays the same: `(domain: str, count: int) → list[dict]` where each dict has `{name, title, email}`.
-
-### Pipeline Flow
-```
-CRM companies → hiring check → email generation → C-suite lookup → personalized draft
-                                     │
-                           ┌─────────┴──────────┐
-                      is_hiring=true        is_hiring=false
-                           │                     │
-                    Mistral AI email        Template email
-                    (tailored, role-aware)  (generic nurture)
-                           │                     │
-                     template fallback            │
-                     (if AI fails)               │
-                           └─────────┬───────────┘
-                                     ▼
-                            C-suite lookup → personalized draft
+### Company result shape (per SSE `company` event)
+```python
+{
+    "company_name": str,
+    "website": str,
+    "is_hiring": bool,
+    "job_count": int,
+    "job_roles": ["Senior Engineer", ...],
+    "custom_mail": {"subject": str, "body": str, "team_focus": str},
+    "mail_source": "mistral_ai" | "template" | "template_fallback" | "failed",
+    "found_contacts": [{"name": str, "title": str, "email": str}, ...],  # 2-3 items
+    "personalized_email": {"to": str, "to_name": str, "to_title": str, "subject": str, "body": str},
+    "error": str | None,    # hiring check error if any
+    "run_date": str,        # YYYY-MM-DD
+}
 ```
 
-Each SSE `company` event now includes:
-| Field | Type | Description |
+### Automatic cron scheduling
+Configured in `main.py` `lifespan()`:
+- Time read from `.env` `SCHED_IST_HOUR` + `SCHED_IST_MINUTE` (IST)
+- Converted to UTC at startup
+- APScheduler `CronTrigger` added to the shared `scheduler.scheduler`
+
+---
+
+## 9. C-Suite Contact Lookup
+
+File: `routes/daily_outreach.py` → `find_csuite_contacts(domain, count=3)`
+
+### Current state: Simulated (placeholder)
+- Deterministic output: same domain always returns the same 3 contacts
+- Hash-seeded from MD5(domain) → `random.Random(seed)`
+- Realistic names, titles, email patterns
+
+Roles covered: CEO, CTO, VP Engineering, COO, VP Sales
+
+### ⚠️ To switch to real enrichment:
+Replace `find_csuite_contacts()` with a call to **Apollo.io**, **RocketReach**, or similar.  
+Function signature must stay: `(domain: str, count: int) → list[{"name": str, "title": str, "email": str}]`
+
+> **NO APOLLO KEY AVAILABLE YET.** Real email fetching is not wired up.  
+> `personalized_email.to` contains **simulated addresses** — do not attempt SMTP sends.
+
+---
+
+## 10. Persistence Layer (SalesTechBE)
+
+Results are pushed to the Django CRM after each outreach run.
+
+**Endpoint:** `POST https://salesapi.gravityer.com/api/v1/hiring-outreach-results/bulk_create/`  
+**Payload:** `{"results": [...], "run_date": "YYYY-MM-DD"}`
+
+### DB model: `HiringOutreachResult` (SalesTechBE)
+| Field | Type | Notes |
 |---|---|---|
-| `found_contacts` | `[{name, title, email}]` | 2-3 simulated C-level contacts |
-| `personalized_email` | `{to, to_name, to_title, subject, body}` | Email addressed to first contact |
-| `mail_source` | `string` | `mistral_ai`, `template`, or `template_fallback` |
+| `company_name` | CharField | db_index |
+| `website` | URLField | nullable |
+| `is_hiring` | BooleanField | default False |
+| `job_count` | IntegerField | default 0 |
+| `job_roles` | JSONField | list |
+| `custom_mail` | JSONField | nullable |
+| `found_contacts` | JSONField | list |
+| `personalized_email` | JSONField | nullable |
+| `mail_source` | CharField | `mistral_ai`, `template`, etc. |
+| `career_page_url` | URLField | nullable |
+| `detection_method` | CharField | nullable |
+| `hiring_summary` | TextField | nullable |
+| `run_date` | DateField | db_index |
+| `error` | TextField | nullable |
+| `email_sent` | BooleanField | **new** — default False; tracks if outreach email was dispatched |
 
-### Email Generation Strategy
-- **Hiring companies** → `JobAnalyzer.generate_outreach_mail()` via Mistral AI. Uses model `mistral-large-latest` with `temperature=0.7`. Prompt includes company name, open roles, and funding context. Produces varied, natural, role-aware cold emails.
-- **Non-hiring companies** → Fast f-string template. No API call needed.
-- **Fallback** → If AI call fails or returns empty, the template generator is used as a safety net.
+### Mark email as sent
+`POST /api/v1/hiring-outreach-results/<id>/send_email/`
 
-### Frontend
-The automation page (`/agency/automation/`) shows:
-- **Expandable company rows** — click to expand
-- **Found Contacts** — name, title, email per contact
-- **Personalized Email Draft** — full preview with To chip, subject line, and body
-- **🤖 AI Generated** / **📝 Template** badge — indicates email source
+- Returns `200 {"id": ..., "email_sent": true}` on success
+- Returns `409 {"detail": "Email already sent for this company."}` if already marked
+- **No actual SMTP is wired**. This endpoint only flips the flag. Real sending TBD when Apollo key is available.
 
+---
+
+## 11. Company Discovery Sources
+
+| Scraper | File | Method | Notes |
+|---|---|---|---|
+| Y Combinator | `yc_scraper.py` | Direct HTTP | Company list page |
+| TechCrunch | `techcrunch_scraper.py` | RSS | Funding articles |
+| Google News | `google_news_scraper.py` | RSS | "funded startup" queries |
+| VentureBeat | `venturebeat_scraper.py` | RSS + Mistral extraction | |
+| NewsAPI | `news_api_scraper.py` | NewsAPI.org REST | 100 req/day free tier |
+| F6S | `f6s_scraper.py` | Serper (site:f6s.com) + Mistral | F6S blocks direct scraping |
+| Product Hunt | `producthunt_scraper.py` | HTTP | |
+
+**Currently enabled in `/api/discover`:** YC + TechCrunch only (editable in `main.py`).
+
+---
+
+## 12. Email Outreach Template Logic
+
+File: `routes/daily_outreach.py` → `generate_mail()`
+
+The template system is funding-signal-aware and team-aware:
+
+**Funding detection** — checks `annual_revenue`, `latest_funding_amount`, `total_funding`, `last_raised_at` for keywords: `raised`, `funding`, `$`, `million`, `billion`, `seed`, `series`.
+
+**Team detection** — scans `industry`, `technologies`, `seo_description` keywords:
+| Detected keywords | Team focus |
+|---|---|
+| ai, ml, machine learning, data | AI / Data Engineering |
+| fintech, finance, banking, payment | FinTech Engineering |
+| health, biotech, medical | HealthTech Engineering |
+| saas, cloud, devops, infra | Cloud / Platform Engineering |
+| ecommerce, retail, marketplace | Full-Stack Engineering |
+| sales, marketing, growth | Sales & Growth |
+| (default) | Engineering |
+
+**Email variants:**
+1. Hiring + roles + funding → AI-tailored (Mistral) subject + role list
+2. Hiring + roles, no funding → AI-tailored, no funding mention  
+3. Hiring, no roles → Template (funding-aware)
+4. Not hiring + funding → Template nurture (congrats angle)
+5. Not hiring, no funding → Generic template
+
+Signature appended: `info@gravityer.com | Gravity Team`
+
+---
+
+## 13. Frontend Integration
+
+The outreach page lives at `salestechui/src/app/agency/automation/page.jsx`.
+
+### SSE consumption
+```javascript
+const es = new EventSource(`${API_BASE}/api/v1/daily-hiring-outreach/?date=...`)
+es.addEventListener('log',     (e) => appendLog(JSON.parse(e.data).message))
+es.addEventListener('company', (e) => appendCompany(JSON.parse(e.data)))
+es.addEventListener('summary', (e) => setSummary(JSON.parse(e.data)))
+```
+
+### Records table columns (current)
+| Column | Source field | Notes |
+|---|---|---|
+| Company | `company_name` + favicon | Favicon from `https://www.google.com/s2/favicons?domain=...` |
+| Website | `website` | External link |
+| Hiring | `is_hiring` | Chip: green/grey |
+| Jobs | `job_count` | |
+| Contacts | `found_contacts.length` | |
+| Email To | `personalized_email.to` | First contact's email |
+| **Email Sent** | `email_sent` | "Yes" (greyed) / "—" |
+| **Send Email** | — | Button → `POST /hiring-outreach-results/<id>/send_email/` |
+
+### Send Email button behaviour
+- **Active** (purple outline): `email_sent === false`
+- **Disabled** (greyed out): `email_sent === true`
+- **Tooltip**: "Email already sent" when disabled
+- On success: local state updated instantly (no page reload needed)
+- History is fetched from `GET /api/v1/hiring-outreach-results/?page_size=N&page=N`
+
+---
+
+## 14. Deployment
+
+| Platform | Config file |
+|---|---|
+| Render | `render.yaml` |
+| Local (dev) | `uvicorn main:app --reload --port 8001` |
+| Virtual env | `d:\JobProspectorBE\myenv\` |
+
+**Start command:**
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8001
+```
+
+**Windows-specific:** `core_utils.apply_windows_asyncio_fix()` must be the first import in `main.py` to set `ProactorEventLoop` before any other async code loads. This is required for Playwright to work on Windows.
+
+---
+
+## 15. Known Limitations / Future Work
+
+| Item | Status |
+|---|---|
+| Real Apollo / RocketReach email lookup | ❌ Not wired. Simulated contacts only. |
+| Actual SMTP / SendGrid email sending | ❌ Not wired. `email_sent` flag is a placeholder. |
+| F6S scraper (direct) | ❌ F6S blocks HTTP. Uses Serper workaround. |
+| Playwright in production | ⚠️ Requires `playwright install chromium`. Works on Windows with ProactorEventLoop fix. |
+| NewsAPI scraper | ⚠️ Optional — 100 req/day free tier. Set `NEWSAPI_KEY` in `.env`. |
+| Hourly passive scheduler | ⚠️ Disabled (`enable_hourly=False`). Re-enable in `main.py` lifespan if needed. |
+
+---
+
+## 16. Golden Rules (for any LLM modifying this project)
+
+1. **Never remove randomized sleep** between company requests (rate limiting / anti-bot).
+2. **Never replace `requests` with Playwright** unless the user explicitly asks.
+3. **Always prefer "Search First"** (Serper) over "Crawl All".
+4. **`email_sent` is a UI placeholder** — do not wire real SMTP until Apollo key is available.
+5. **`found_contacts` are simulated** — never send real emails to these addresses.
+6. **IST times in `.env`** are converted to UTC at startup — do not hardcode UTC times.
+7. **`apply_windows_asyncio_fix()` must be the first call in `main.py`** — before any imports that might set the event loop.
