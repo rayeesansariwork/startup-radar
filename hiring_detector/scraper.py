@@ -5,6 +5,7 @@ Handles JavaScript-heavy pages that require browser rendering
 
 import logging
 import asyncio
+import os
 from typing import Optional
 from bs4 import BeautifulSoup
 
@@ -17,6 +18,24 @@ try:
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
     logger.warning("Playwright not installed - dynamic page scraping disabled")
+
+
+def _chromium_binary_exists() -> bool:
+    """
+    Quick binary check so we don't waste time launching Playwright when
+    the browser hasn't been installed (e.g. Render free tier).
+    """
+    import glob
+    patterns = [
+        # Linux (Render/Docker)
+        "/opt/render/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
+        os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux/chrome"),
+        # macOS
+        os.path.expanduser("~/Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
+        # Windows
+        os.path.expanduser("~/AppData/Local/ms-playwright/chromium-*/chrome-win/chrome.exe"),
+    ]
+    return any(glob.glob(p) for p in patterns)
 
 
 class PlaywrightScraper:
@@ -35,7 +54,11 @@ class PlaywrightScraper:
             HTML content as string
         """
         if not PLAYWRIGHT_AVAILABLE:
-            logger.error("Playwright not available")
+            logger.warning("Playwright package not installed — skipping browser scrape")
+            return None
+
+        if not _chromium_binary_exists():
+            logger.warning("Playwright Chromium binary not found — skipping browser scrape (run: playwright install chromium)")
             return None
         
         try:

@@ -141,8 +141,15 @@ class HiringTriangulator:
     # Priority 2: Sitemap Surgeon
     # ------------------------------------------------------------------
 
+    # URL segments that indicate this is NOT a job listing page
+    _SITEMAP_BLOCKLIST = (
+        "/blog/", "/news/", "/article/", "/press/",
+        "/media/", "/podcast/", "/training/", "/post/",
+        "/resources/", "/learn/",
+    )
+
     def _check_sitemap(self, domain: str) -> Tuple[Optional[str], Optional[str]]:
-        """Fetch sitemap.xml and look for career/jobs URLs."""
+        """Fetch sitemap.xml and look for actual career/jobs listing URLs."""
         sitemap_url = f"https://{domain}/sitemap.xml"
         try:
             res = self._session.get(
@@ -153,7 +160,12 @@ class HiringTriangulator:
             if res.status_code == 200:
                 urls = re.findall(r"<loc>(.*?)</loc>", res.text)
                 for u in urls:
-                    if "career" in u.lower() or "jobs" in u.lower() or "join" in u.lower():
+                    u_lower = u.lower()
+                    if "career" in u_lower or "jobs" in u_lower or "join" in u_lower:
+                        # Skip blog posts / articles that mention careers in their URL
+                        if any(block in u_lower for block in self._SITEMAP_BLOCKLIST):
+                            logger.debug("Sitemap: skipping non-listing URL: %s", u)
+                            continue
                         return u, "Sitemap_Discovery"
         except Exception as e:
             logger.debug(f"Sitemap fetch failed for {domain}: {e}")
