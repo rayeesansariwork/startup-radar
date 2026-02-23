@@ -241,15 +241,14 @@ class NotificationService:
                     """
             html += "</div>"
         
-        # Add companies list (show top 20)
+        # Add companies list (show all)
         if companies:
-            display_count = min(50, len(companies))
             html += f"""
             <div class="companies-list">
-                <h2>🏢 Discovered Companies (Top {display_count})</h2>
+                <h2>🏢 Discovered Companies ({len(companies)} Found)</h2>
             """
             
-            for company in companies[:display_count]:
+            for company in companies:
                 company_name = company.get('company_name', 'Unknown')
                 website = company.get('website', 'N/A')
                 funding_info = company.get('funding_info', 'N/A')
@@ -276,9 +275,6 @@ class NotificationService:
                     </div>
                 </div>
                 """
-            
-            if len(companies) > display_count:
-                html += f"<p><em>... and {len(companies) - display_count} more companies</em></p>"
             
             html += "</div>"
         else:
