@@ -526,6 +526,11 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
 
                 # ── Immediately sync contacts to CRM to prevent data loss ──
                 try:
+                    sync_headers = {
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json"
+                    } if token else {}
+                    
                     sync_resp = await loop.run_in_executor(
                         None,
                         lambda: sync_requests.post(
