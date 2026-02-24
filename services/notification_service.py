@@ -89,10 +89,11 @@ class NotificationService:
             # 1. Use SalesTechBE's /gamil/send_mail/ endpoint
             sales_api_url = "https://salesapi.gravityer.com/api/v1/gamil/send_mail/"
             sender_email = "shilpi.bhatia@gravityer.com"
+            recipient_string = ", ".join(self.recipients)
             
             payload = {
-                "from_email": sender_email,
-                "to_email": self.recipients,  # Expected format for the API, assuming it accepts a list or array
+                "from": sender_email,
+                "to": recipient_string,
                 "subject": subject,
                 "body": html_body
             }

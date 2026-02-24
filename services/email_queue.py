@@ -17,10 +17,12 @@ class EmailQueueService:
         self.delay_seconds = delay_seconds
         self.send_real_emails = send_real_emails
         self.worker_task = None
+        self._main_loop = None  # Will be set when start() is called on the main loop
         
     async def start(self):
         """Starts the background worker task."""
         if self.worker_task is None:
+            self._main_loop = asyncio.get_event_loop()  # Capture the main FastAPI event loop
             self.worker_task = asyncio.create_task(self._process_queue())
             logger.info(f"✅ Started EmailQueueService background worker (delay: {self.delay_seconds}s)")
 
@@ -37,11 +39,25 @@ class EmailQueueService:
 
     async def enqueue_email(self, payload: Dict[str, Any]):
         """
-        Add an email payload to the queue.
-        Payload expected format: {"to": str, "to_name": str, "subject": str, "body": str}
+        Add an email payload to the queue (from within the main async event loop).
         """
         await self.queue.put(payload)
         logger.info(f"📥 Queued outreach email to {payload.get('to')} (Queue size: {self.queue.qsize()})")
+
+    def enqueue_threadsafe(self, payload: Dict[str, Any]):
+        """
+        Thread-safe version for calling from a background thread (e.g., APScheduler cron job).
+        Schedules the put() on the main FastAPI event loop using run_coroutine_threadsafe.
+        """
+        if self._main_loop is None or self._main_loop.is_closed():
+            logger.error("❌ Cannot enqueue email: main event loop not available")
+            return
+        future = asyncio.run_coroutine_threadsafe(self.queue.put(payload), self._main_loop)
+        try:
+            future.result(timeout=5)  # block briefly to confirm it was queued
+            logger.info(f"📥 [Thread-safe] Queued email to {payload.get('to')} (Queue size: ~{self.queue.qsize()})")
+        except Exception as e:
+            logger.error(f"❌ Failed to thread-safe enqueue email to {payload.get('to')}: {e}")
 
     async def _process_queue(self):
         """Infinite loop processing emails one by one with a delay."""

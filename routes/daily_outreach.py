@@ -524,6 +524,28 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
                                + ", ".join(f'{c["name"]} ({c["title"]}) - {c["email"]}' for c in contacts)
                 })
 
+                # ── Immediately sync contacts to CRM to prevent data loss ──
+                try:
+                    sync_payload = {
+                        "company_name": name,
+                        "website": website,
+                        "contacts": contacts
+                    }
+                    sync_resp = await loop.run_in_executor(
+                        None,
+                        lambda p=sync_payload: sync_requests.post(
+                            f"{CRM_BASE_URL}/hiring-outreach-results/sync_contacts/",
+                            json=p,
+                            timeout=10
+                        )
+                    )
+                    if sync_resp.status_code == 200:
+                        yield _sse("log", {"message": "   💾 Contacts independently secured in CRM Company & Contact models."})
+                    else:
+                        logger.error(f"CRM sync returned {sync_resp.status_code}: {sync_resp.text}")
+                except Exception as e:
+                    logger.error(f"Instant CRM sync failed for {name}: {e}")
+
                 # Personalize mail to the first (highest-priority) contact
                 if result_entry["custom_mail"]:
                     personalized = generate_personalized_mail(
@@ -595,7 +617,17 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
                     
                     # Only enqueue if it hasn't somehow already been marked as sent
                     if not payload["already_emailed"]:
-                        await email_queue.enqueue_email(payload)
+                        try:
+                            # Try native async enqueue (works on the HTTP SSE path)
+                            cur_loop = asyncio.get_event_loop()
+                            if email_queue._main_loop and cur_loop is not email_queue._main_loop:
+                                # We are on the cron thread's separate loop — use threadsafe bridge
+                                email_queue.enqueue_threadsafe(payload)
+                            else:
+                                await email_queue.enqueue_email(payload)
+                        except RuntimeError:
+                            # No running loop — use threadsafe bridge
+                            email_queue.enqueue_threadsafe(payload)
                         queued_count += 1
             
             if queued_count > 0:

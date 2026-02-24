@@ -119,25 +119,38 @@ async def lifespan(app: FastAPI):
     )
 
     def _run_daily_outreach():
-        """Synchronous wrapper that consumes the full outreach stream."""
+        """Synchronous wrapper that FULLY consumes the outreach stream in a new thread."""
         target_date = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
         logger.info("⏰ [Cron] Daily hiring outreach triggered for %s", target_date)
 
         async def _consume():
-            async for _ in _stream(target_date, page_size=15):
-                pass  # each yield does its own work (hiring check, mail gen, DB save)
+            """Consume the entire SSE stream including the end-of-stream DB save & email enqueue."""
+            async for event in _stream(target_date, page_size=15):
+                pass  # Each yield handles its own work; we must exhaust the generator fully
 
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(_consume())
-            else:
-                loop.run_until_complete(_consume())
-        except RuntimeError:
-            asyncio.run(_consume())
+        import threading
+        error_holder = []
 
-        logger.info("✅ [Cron] Daily hiring outreach finished for %s", target_date)
+        def _run_in_thread():
+            """Run a brand-new event loop in a background thread so we block until done."""
+            try:
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                new_loop.run_until_complete(_consume())
+            except Exception as exc:
+                logger.error("[Cron] Outreach stream error: %s", exc, exc_info=True)
+                error_holder.append(exc)
+            finally:
+                new_loop.close()
+
+        t = threading.Thread(target=_run_in_thread, daemon=True)
+        t.start()
+        t.join()  # Block the cron thread until the stream is fully consumed
+
+        if error_holder:
+            logger.error("✗ [Cron] Outreach finished with errors for %s", target_date)
+        else:
+            logger.info("✅ [Cron] Daily hiring outreach finished for %s", target_date)
 
     scheduler.scheduler.add_job(
         _run_daily_outreach,
