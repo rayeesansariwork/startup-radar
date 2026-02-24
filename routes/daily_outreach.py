@@ -642,45 +642,37 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
     try:
         from services import NotificationService
         
-        has_gmail = settings.gmail_user and settings.gmail_app_password
-        has_sendgrid = settings.sendgrid_api_key and settings.sendgrid_from_email
+        yield _sse("log", {"message": "📧 Sending summary email notification via SalesTechBE …"})
         
-        if has_gmail or has_sendgrid:
-            yield _sse("log", {"message": "📧 Sending summary email notification …"})
+        default_recipients = [
+            "mounica@gravityer.com",
+            "abhinaw@gravityer.com",
+            "pr@gravityer.com",
+            "raeessg22@gmail.com",
+            "arindam@gravityer.com",
+        ]
+        recipients = list(default_recipients)
+        if settings.notification_recipient and settings.notification_recipient not in recipients:
+            recipients.append(settings.notification_recipient)
             
-            default_recipients = [
-                "mounica@gravityer.com",
-                "abhinaw@gravityer.com",
-                "pr@gravityer.com",
-                "raeessg22@gmail.com",
-                "arindam@gravityer.com",
-            ]
-            recipients = list(default_recipients)
-            if settings.notification_recipient and settings.notification_recipient not in recipients:
-                recipients.append(settings.notification_recipient)
-                
-            notification_service = NotificationService(
-                gmail_user=settings.gmail_user,
-                gmail_app_password=settings.gmail_app_password,
-                recipients=recipients,
-                sendgrid_api_key=settings.sendgrid_api_key,
-                sendgrid_from_email=settings.sendgrid_from_email
-            )
-            
-            # Format the data for the existing NotificationService template
-            # Reusing the existing discovery format since we just need the same visual email
-            notification_data = {
-                "companies": processed,
-                "sources_used": ["ENRICHMENT ENGINE + MISTRAL AI"],
-                "duration": 0.0, # Not tracked per session here
-                "error": None
-            }
-            email_sent = notification_service.send_discovery_notification(notification_data, discovery_type="Daily Outreach")
-            
-            if email_sent:
-                yield _sse("log", {"message": f"✅ Email notification sent successfully to {len(recipients)} recipients"})
-            else:
-                yield _sse("log", {"message": "⚠️ Email notification failed (check backend logs)"})
+        notification_service = NotificationService(
+            recipients=recipients
+        )
+        
+        # Format the data for the existing NotificationService template
+        # Reusing the existing discovery format since we just need the same visual email
+        notification_data = {
+            "companies": processed,
+            "sources_used": ["ENRICHMENT ENGINE + MISTRAL AI"],
+            "duration": 0.0, # Not tracked per session here
+            "error": None
+        }
+        email_sent = notification_service.send_discovery_notification(notification_data, discovery_type="Daily Outreach")
+        
+        if email_sent:
+            yield _sse("log", {"message": f"✅ Email notification sent successfully to {len(recipients)} recipients"})
+        else:
+            yield _sse("log", {"message": "⚠️ Email notification failed (check backend logs)"})
     except Exception as e:
         logger.error(f"Failed to send outreach email notification: {e}", exc_info=True)
         yield _sse("log", {"message": f"⚠️ Could not send email notification: {e}"})

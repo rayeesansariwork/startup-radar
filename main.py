@@ -45,10 +45,8 @@ crm = CRMClient()
 hiring_checker = EnhancedHiringChecker(mistral_api_key=settings.mistral_api_key)
 hiring_page_finder = HiringPageFinderService()
 
-# Initialize notification service (if credentials provided)
+# Initialize notification service
 notification_service = None
-has_gmail = settings.gmail_user and settings.gmail_app_password
-has_sendgrid = settings.sendgrid_api_key and settings.sendgrid_from_email
 
 # Default list of recipients to receive daily emails
 default_recipients = [
@@ -58,22 +56,14 @@ default_recipients = [
     "raeessg22@gmail.com"
 ]
 
-if has_gmail or has_sendgrid:
-    recipients = list(default_recipients)
-    if settings.notification_recipient and settings.notification_recipient not in recipients:
-        recipients.append(settings.notification_recipient)
-        
-    notification_service = NotificationService(
-        gmail_user=settings.gmail_user,
-        gmail_app_password=settings.gmail_app_password,
-        recipients=recipients,
-        sendgrid_api_key=settings.sendgrid_api_key,
-        sendgrid_from_email=settings.sendgrid_from_email
-    )
-    method = "SendGrid" if has_sendgrid else "Gmail SMTP"
-    logger.info(f"✅ Email notifications enabled via {method} for {len(recipients)} recipients")
-else:
-    logger.warning("⚠️ Email notifications disabled - No valid credentials configured")
+recipients = list(default_recipients)
+if settings.notification_recipient and settings.notification_recipient not in recipients:
+    recipients.append(settings.notification_recipient)
+    
+notification_service = NotificationService(
+    recipients=recipients
+)
+logger.info(f"✅ Email notifications enabled via SalesTechBE for {len(recipients)} recipients")
 
 # Initialize scheduled discovery (passive engine)
 scheduler = ScheduledDiscoveryService(

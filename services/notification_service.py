@@ -86,64 +86,52 @@ class NotificationService:
             )
             
             
-            # 1. Try SendGrid first if configured
-            if self.sendgrid_api_key and self.sendgrid_from_email:
-                try:
-                    logger.info(f"[Notification] Sending email via SendGrid to {', '.join(self.recipients)}...")
-                    sg = SendGridAPIClient(self.sendgrid_api_key)
-                    message = Mail(
-                        from_email=self.sendgrid_from_email,
-                        to_emails=self.recipients,
-                        subject=subject,
-                        html_content=html_body
-                    )
-                    response = sg.send(message)
-                    logger.info(f"[Notification] Email sent via SendGrid! Status: {response.status_code}")
-                    return True
-                except Exception as e:
-                    logger.error(f"[Notification] SendGrid failed: {e}")
-                    logger.info("[Notification] Falling back to Gmail SMTP...")
+            # 1. Use SalesTechBE's /gamil/send_mail/ endpoint
+            sales_api_url = "https://salesapi.gravityer.com/api/v1/gamil/send_mail/"
+            sender_email = "shilpi.bhatia@gravityer.com"
             
-            # 2. Fallback to Gmail SMTP if SendGrid missing or failed
-            if not self.gmail_user or not self.gmail_app_password:
-                logger.error("[Notification] No Gmail credentials for fallback. Email not sent.")
-                return False
-
-            # Create SMTP email message
-            message = MIMEMultipart('alternative')
-            message['Subject'] = subject
-            message['From'] = self.gmail_user
-            message['To'] = ", ".join(self.recipients)
+            payload = {
+                "from_email": sender_email,
+                "to_email": self.recipients,  # Expected format for the API, assuming it accepts a list or array
+                "subject": subject,
+                "body": html_body
+            }
             
-            # Attach HTML body
-            html_part = MIMEText(html_body, 'html')
-            message.attach(html_part)
+            logger.info(f"[Notification] Sending email via SalesTechBE to {', '.join(self.recipients)}...")
             
-            # Try sending email via Gmail SMTP with fallback
-            logger.info(f"[Notification] Sending email via Gmail SMTP to {', '.join(self.recipients)}...")
+            import requests as sync_requests
             
-            # Try TLS first (port 587)
+            # Authenticate to get a JWT token
+            from config import settings
+            token = None
+            crm_base = settings.crm_base_url.rstrip('/')
             try:
-                with smtplib.SMTP(self.smtp_server, self.smtp_port_tls, timeout=10) as server:
-                    server.starttls()  # Secure connection
-                    server.login(self.gmail_user, self.gmail_app_password)
-                    server.send_message(message)
-                logger.info(f"[Notification] Email sent successfully via TLS (port {self.smtp_port_tls})")
-                return True
-            except (OSError, smtplib.SMTPException) as e:
-                logger.warning(f"[Notification] TLS connection failed: {e}")
+                auth_resp = sync_requests.post(f"{crm_base}/token/obtain/", json={
+                    "email": settings.crm_email,
+                    "password": settings.crm_password
+                }, timeout=15)
+                if auth_resp.status_code == 200:
+                    token = auth_resp.json().get("access")
+                else:
+                    logger.error(f"[Notification] Failed to get JWT token: {auth_resp.status_code}")
+            except Exception as e:
+                logger.error(f"[Notification] Error getting token: {e}")
                 
-                 # Fallback to SSL (port 465)
-                try:
-                    with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port_ssl, timeout=10) as server:
-                        server.login(self.gmail_user, self.gmail_app_password)
-                        server.send_message(message)
-                    logger.info(f"[Notification] Email sent successfully via SSL (port {self.smtp_port_ssl})")
-                    return True
-                except Exception as ssl_error:
-                    logger.error(f"[Notification] SSL connection also failed: {ssl_error}")
-                    raise
+            headers = {"Content-Type": "application/json"}
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            else:
+                logger.warning("[Notification] Sending email without authentication headers, it may fail with 401")
             
+            response = sync_requests.post(sales_api_url, json=payload, headers=headers, timeout=30)
+            
+            if response.status_code in (200, 201, 202):
+                logger.info(f"[Notification] Email sent via SalesTechBE! Status: {response.status_code}")
+                return True
+            else:
+                logger.error(f"[Notification] SalesTechBE failed to send email. Status: {response.status_code}, Response: {response.text}")
+                return False
+                
         except Exception as e:
             logger.error(f"[Notification] Failed to send email: {type(e).__name__}: {e}", exc_info=True)
             return False
