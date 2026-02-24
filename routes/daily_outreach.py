@@ -42,10 +42,10 @@ _DELAY_MAX = 7.0   # seconds
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
-CRM_BASE_URL = "https://salesapi.gravityer.com/api/v1"
+CRM_BASE_URL = settings.crm_base_url.rstrip("/")
 CRM_CREDENTIALS = {
-    "email": "rayees@gravityer.com",
-    "password": "Raees@786",
+    "email": settings.crm_email,
+    "password": settings.crm_password,
 }
 
 FUNDING_KEYWORDS = [

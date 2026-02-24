@@ -7,6 +7,45 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+
+def body_to_html(text: str) -> str:
+    """
+    Convert a plain-text email body (with \\n newlines and embedded HTML
+    fragments like <a> and <img>) into a properly formatted HTML email.
+    Each double-newline becomes a paragraph. Single newlines become <br>.
+    """
+    import re
+
+    paragraphs = re.split(r'\n{2,}', text.strip())
+    html_parts = []
+    for para in paragraphs:
+        para_html = para.replace('\n', '<br>')
+        stripped = para_html.strip()
+        # If the paragraph is already an HTML element (img, a, etc.) don't wrap it
+        if stripped.startswith('<') and not stripped.startswith('<br'):
+            html_parts.append(stripped)
+        else:
+            html_parts.append(f'<p style="margin:0 0 14px 0;">{para_html}</p>')
+
+    body_inner = '\n'.join(html_parts)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.7;color:#2d2d2d;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr><td align="center">
+      <table width="620" cellpadding="0" cellspacing="0" border="0" style="max-width:620px;width:100%;padding:32px 24px;">
+        <tr><td>
+{body_inner}
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
 class EmailQueueService:
     """
     Background worker service that polls an asyncio.Queue and processes
@@ -113,7 +152,7 @@ class EmailQueueService:
                                 mail_payload = {
                                     "to": to_addr,
                                     "subject": subject,
-                                    "body": body
+                                    "body": body_to_html(body)   # convert to proper HTML
                                 }
                                 
                                 req = requests.post(endpoint, headers=headers, json=mail_payload, timeout=20)
