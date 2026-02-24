@@ -526,25 +526,25 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
 
                 # ── Immediately sync contacts to CRM to prevent data loss ──
                 try:
-                    sync_payload = {
-                        "company_name": name,
-                        "website": website,
-                        "contacts": contacts
-                    }
                     sync_resp = await loop.run_in_executor(
                         None,
-                        lambda p=sync_payload: sync_requests.post(
+                        lambda: sync_requests.post(
                             f"{CRM_BASE_URL}/hiring-outreach-results/sync_contacts/",
-                            json=p,
-                            timeout=10
+                            json={
+                                "company_name": name,
+                                "website": website,
+                                "contacts": contacts
+                            },
+                            headers=sync_headers,
+                            timeout=15
                         )
                     )
                     if sync_resp.status_code == 200:
-                        yield _sse("log", {"message": "   💾 Contacts independently secured in CRM Company & Contact models."})
+                        yield _sse("log", {"message": f"   ✅ Apollo contacts saved to CRM for {name}"})
                     else:
-                        logger.error(f"CRM sync returned {sync_resp.status_code}: {sync_resp.text}")
+                        yield _sse("log", {"message": f"   ⚠️ CRM sync returned {sync_resp.status_code}: {sync_resp.text[:200]}"})
                 except Exception as e:
-                    logger.error(f"Instant CRM sync failed for {name}: {e}")
+                    logger.error("Error syncing Apollo contacts to SalesTechBE for %s: %s", name, e)
 
                 # Personalize mail to the first (highest-priority) contact
                 if result_entry["custom_mail"]:
@@ -590,9 +590,15 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
     # ── Persist results to SalesTechBE ──────────────────────────────────
     try:
         yield _sse("log", {"message": "💾 Saving results to database …"})
+        persist_headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        } if token else {}
+        
         persist_resp = sync_requests.post(
             f"{CRM_BASE_URL}/hiring-outreach-results/bulk_create/",
             json={"results": processed, "run_date": target_date},
+            headers=persist_headers,
             timeout=REQUEST_TIMEOUT,
         )
         if persist_resp.status_code == 201:
