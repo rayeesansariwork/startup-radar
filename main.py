@@ -29,6 +29,7 @@ from models import (
     FindJobsRequest, FindJobsResponse     # New imports
 )
 from services import CRMClient, CompanyDiscoveryService, ScheduledDiscoveryService, NotificationService, HiringPageFinderService
+from services.email_queue import email_queue
 from hiring_detector.checker import EnhancedHiringChecker
 from hiring_detector.analyzer import JobAnalyzer
 from routes.daily_outreach import router as daily_outreach_router
@@ -146,12 +147,16 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    # Start the background email queuing service
+    await email_queue.start()
+
     logger.info("JobProspectorBE started successfully")
     
     yield
     
     # Shutdown
     logger.info("Shutting down JobProspectorBE...")
+    await email_queue.stop()
     scheduler.stop()
     logger.info("JobProspectorBE shut down successfully")
 

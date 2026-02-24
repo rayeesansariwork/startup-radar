@@ -30,6 +30,8 @@ from config import settings
 from core_utils import execute_with_retry
 from hiring_detector.checker import EnhancedHiringChecker
 from hiring_detector.analyzer import JobAnalyzer
+from services.apollo_service import ApolloService
+from services.email_queue import email_queue
 
 logger = logging.getLogger("daily_outreach")
 router = APIRouter(prefix="/api/v1", tags=["daily-outreach"])
@@ -197,7 +199,21 @@ def _detect_team(company: dict) -> str:
     return "Engineering"
 
 
-SIGNATURE = "\n\nBest regards,\nGravity Team\nRayees@gravityer.com"
+CTA_BANNER = (
+    '\n\n<a href="https://calendly.com/shilpibhatia-gravity/30min" target="_blank">'
+    '<img src="https://ci3.googleusercontent.com/mail-sig/AIorK4zzPing2FyYjR1YFA-fvADgwE2cUWzzqE3RXGzQjp5AKHwa7Prc33GyN-XnlAjsCkWjxa_f7p2rlRNd" '
+    'width="100" height="29" alt="Book a meeting with Gravity Engineering" '
+    'style="display:block;border:none;" /></a>'
+)
+
+SIGNATURE = (
+    "\n\nShilpi Bhatia\n"
+    "Senior BDM\n"
+    "Gravity Engineering Services Pvt Ltd.\n"
+    "shilpibhatiya@gravityer.com"
+)
+
+FULL_SIGNATURE = SIGNATURE + CTA_BANNER
 
 
 # ─── C-suite contact simulation ─────────────────────────────────────────────
@@ -262,13 +278,8 @@ def generate_mail(
     job_roles: list[str] | None = None,
 ) -> dict:
     """
-    Generate an outreach email.
-
-    • **is_hiring = True**  → tailored email mentioning the specific open
-      roles the company is actively hiring for.
-    • **is_hiring = False** → generic nurture / intro email.
-
-    Both variants are funding-signal-aware.
+    Generate an outreach email snippet following exactly the same structure
+    and tone as the AI generated ones in analyzer.py.
     """
     name = company.get("company_name", "there")
     funded = _has_funding_signal(company)
@@ -276,115 +287,42 @@ def generate_mail(
     team = _detect_team(company)
     roles = job_roles or []
 
+    # Funding congratulations line
+    if funded and snippet:
+        funding_congrats = f"Congrats on the {snippet}. I am really happy to see your growth."
+    elif funded:
+        funding_congrats = "Congrats on the recent funding. I am really happy to see your growth."
+    else:
+        funding_congrats = "You guys are doing great work and the growth is clearly showing."
+
+    opening_greeting = f"Hey {name} team,"
+    opening_sentence = f"I have been following {name} for a while now. {funding_congrats}"
+
     # ── Tailored email (hiring = True) ──────────────────────────────────
     if is_hiring and roles:
-        # Build a readable role list  (max 5 to keep email concise)
         if len(roles) <= 3:
-            role_list = ", ".join(roles)
+            role_list = " and ".join([", ".join(roles[:-1]), roles[-1]] if len(roles) > 1 else roles)
         else:
-            role_list = ", ".join(roles[:4]) + f" and {len(roles) - 4} more"
-
-        if funded and snippet:
-            subject = (
-                f"Congrats on the raise, {name}! "
-                f"Let us fill your open {team} roles"
-            )
-            opening = (
-                f"Hi {name} team,\n\n"
-                f"Congrats on your recent funding ({snippet}) — exciting times! "
-                f"We noticed you're actively hiring for: **{role_list}**.\n\n"
-                f"Post-raise hiring can be a bottleneck. "
-                f"We specialise in placing senior {team} talent fast, "
-                f"so you can keep shipping without slowing down."
-            )
-        else:
-            subject = (
-                f"{name} — we can help fill your {job_count} open "
-                f"{team} {'role' if job_count == 1 else 'roles'}"
-            )
-            opening = (
-                f"Hi {name} team,\n\n"
-                f"We came across your open positions and noticed you're "
-                f"looking for: **{role_list}**.\n\n"
-                f"Finding top-tier {team} talent is hard — and that's exactly what "
-                f"we do at Gravity. We provide pre-vetted, senior engineers "
-                f"who integrate directly with your team."
-            )
-
-        body = (
-            f"{opening}\n\n"
-            f"How it works:\n"
-            f"  1. Tell us the role(s) — seniority, stack, timezone.\n"
-            f"  2. We send 2-3 matched profiles within 72 hours.\n"
-            f"  3. Your pick starts as a full-time embedded team member.\n\n"
-            f"No recruitment fees, no long contracts — just great engineers "
-            f"at a fraction of local hiring costs.\n\n"
-            f"Worth a quick 15-min chat? Just reply here or reach out at "
-            f"Rayees@gravityer.com."
-            f"{SIGNATURE}"
-        )
+            role_list = ", ".join(roles[:3]) + " and more"
+            
+        subject = f"{name} - {team} roles"
+        body_para1 = f"{opening_sentence} I was checking your careers page and LinkedIn and I saw that you are hiring {role_list}. You already know how high the market rates are for these roles."
 
     # ── Hiring but no role details ──────────────────────────────────────
     elif is_hiring:
-        if funded and snippet:
-            subject = f"Congrats on the raise, {name}! Let's scale your {team} team"
-            opening = (
-                f"Hi {name} team,\n\n"
-                f"Congrats on your recent funding ({snippet})! "
-                f"We see you're growing — Gravity can help you scale {team} "
-                f"with pre-vetted engineers, fast."
-            )
-        else:
-            subject = f"Saw you're hiring, {name} — we can help with {team}"
-            opening = (
-                f"Hi {name} team,\n\n"
-                f"We noticed you're actively hiring. "
-                f"Gravity helps companies like yours fill {team} roles quickly "
-                f"with senior, pre-vetted remote engineers."
-            )
-
-        body = (
-            f"{opening}\n\n"
-            f"We handle sourcing, vetting, and onboarding — you get a "
-            f"full-time engineer embedded in your team within days, not months.\n\n"
-            f"Would love a quick chat to see if we can help. "
-            f"Reply here or reach out at Rayees@gravityer.com."
-            f"{SIGNATURE}"
-        )
+        subject = f"{name} - {team} roles"
+        body_para1 = f"{opening_sentence} I was checking your careers page and LinkedIn and I saw that you are actively hiring for your {team} team. You already know how high the market rates are for these roles."
 
     # ── Generic nurture email (not hiring) ──────────────────────────────
     else:
-        if funded and snippet:
-            subject = f"Congrats on the recent raise, {name}! Let's help you scale {team}"
-            opening = (
-                f"Hi {name} team,\n\n"
-                f"Congrats on your recent funding ({snippet}) — exciting times! "
-                f"As you ramp up hiring for {team}, we'd love to help you move faster."
-            )
-        elif funded:
-            subject = f"Exciting growth ahead, {name} — let's talk {team} staffing"
-            opening = (
-                f"Hi {name} team,\n\n"
-                f"We noticed your recent funding round — congrats! "
-                f"Growing your {team} team quickly and cost-effectively is what we do best."
-            )
-        else:
-            subject = f"Scaling your {team} team, {name}?"
-            opening = (
-                f"Hi {name} team,\n\n"
-                f"We help ambitious companies like yours build world-class {team} teams "
-                f"through cost-effective staff augmentation."
-            )
+        subject = f"{name} - Growth & Engineering team"
+        body_para1 = f"{opening_sentence} As you continue to scale your {team} team, you already know how high the market rates are for these roles across regions."
 
-        body = (
-            f"{opening}\n\n"
-            f"Gravity provides pre-vetted, full-time remote engineers who integrate "
-            f"directly with your team — at a fraction of local hiring costs. Whether "
-            f"you need 1 engineer or 10, we can move in days, not months.\n\n"
-            f"Would love to have a quick chat to see if there's a fit. "
-            f"Just reply here or reach out at Rayees@gravityer.com."
-            f"{SIGNATURE}"
-        )
+    body_para2 = "We can provide the same level of talent at a much lower cost. We place pre-vetted engineers into your team full time, remote or onsite, based on what works best for you. They plug into your workflow and start contributing fast."
+
+    body_para3 = "If this helps your hiring plans, I would love to support your growth. We can provide the right resources based on your needs and budget. If you want to discuss this, please book a slot here: https://calendly.com/shilpibhatia-gravity/30min"
+    
+    body = f"{opening_greeting}\n\n{body_para1}\n\n{body_para2}\n\n{body_para3}{FULL_SIGNATURE}"
 
     return {"subject": subject, "body": body, "team_focus": team}
 
@@ -399,10 +337,10 @@ def generate_personalized_mail(
     first_name = contact["name"].split()[0]
     company_name = company.get("company_name", "there")
 
-    # Replace generic "Hi <Company> team" with "Hi <FirstName>"
+    # Replace generic "Hey <Company> team" with "Hey <FirstName>"
     body = base_mail["body"].replace(
-        f"Hi {company_name} team",
-        f"Hi {first_name}",
+        f"Hey {company_name} team",
+        f"Hey {first_name}",
     )
 
     return {
@@ -452,7 +390,10 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
     # 3) Hiring checker + AI email writer
     hiring_checker = EnhancedHiringChecker(mistral_api_key=settings.mistral_api_key)
     job_analyzer = JobAnalyzer(mistral_api_key=settings.mistral_api_key)
+    apollo_service = ApolloService(api_key=settings.apollo_api_key)
+    
     yield _sse("log", {"message": "🤖 Mistral AI ready (will generate tailored emails for hiring companies)"})
+    yield _sse("log", {"message": "🔍 Apollo Service initialized for real contact discovery"})
 
     processed: list[dict] = []
     hiring_calls = 0
@@ -570,25 +511,39 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
                 result_entry["custom_mail"] = None
                 result_entry["mail_source"] = "failed"
 
-        # ── Find C-suite contacts (simulated) ──
+        # ── Find C-suite contacts (Apollo API) ──
         domain = (website or "").replace("https://", "").replace("http://", "").strip("/")
         if domain:
-            contacts = find_csuite_contacts(domain, count=3)
+            yield _sse("log", {"message": f"   📇 Searching Apollo for contacts at {domain}..."})
+            contacts = await loop.run_in_executor(None, apollo_service.find_csuite_contacts, domain, 3)
             result_entry["found_contacts"] = contacts
-            yield _sse("log", {
-                "message": f"   📇 Found {len(contacts)} contacts: "
-                           + ", ".join(f'{c["name"]} ({c["title"]})' for c in contacts)
-            })
-
-            # Personalize mail to the first (highest-priority) contact
-            if contacts and result_entry["custom_mail"]:
-                personalized = generate_personalized_mail(
-                    company, contacts[0], result_entry["custom_mail"]
-                )
-                result_entry["personalized_email"] = personalized
+            
+            if contacts:
                 yield _sse("log", {
-                    "message": f"   ✉️  Personalized email → {personalized['to']} ({personalized['to_title']})"
+                    "message": f"   ✅ Found {len(contacts)} leads: "
+                               + ", ".join(f'{c["name"]} ({c["title"]}) - {c["email"]}' for c in contacts)
                 })
+
+                # Personalize mail to the first (highest-priority) contact
+                if result_entry["custom_mail"]:
+                    personalized = generate_personalized_mail(
+                        company, contacts[0], result_entry["custom_mail"]
+                    )
+                    result_entry["personalized_email"] = personalized
+                    
+                    # ── Queue the email for staggered dispatch ──
+                    payload = {
+                        "to": personalized["to"],
+                        "to_name": personalized["to_name"],
+                        "subject": personalized["subject"],
+                        "body": personalized["body"]
+                    }
+                    await email_queue.enqueue_email(payload)
+                    yield _sse("log", {
+                        "message": f"   ⏳ Sent to staggered queue for {personalized['to']} ({personalized['to_title']})"
+                    })
+            else:
+                yield _sse("log", {"message": f"   ⚠️ No contacts found by Apollo for {domain}."})
 
         processed.append(result_entry)
         yield _sse("company", result_entry)

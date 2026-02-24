@@ -248,7 +248,7 @@ Return ONLY a JSON array of cleaned job titles:
 Follow this EXACT structure and tone. Fill in the bracketed parts with real values from the context below. Do not change the sentence structure -- only swap in the right details.
 
 --- TEMPLATE ---
-Hey [first name if known, else omit the greeting line],
+Hey [first name if known, else send an generic greeting line of Hey {company_name} team],
 
 I have been following {company_name} for a while now. You guys are doing great work. {funding_congrats} I was checking your careers page and LinkedIn and I saw that you are hiring {roles_sample}. You already know how high the market rates are for these roles.
 

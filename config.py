@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     sched_ist_hour: int = 15    # IST hour  for daily hiring-outreach cron
     sched_ist_minute: int = 40  # IST minute for daily hiring-outreach cron
     
+    # Apollo API
+    apollo_api_key: Optional[str] = None
+
     class Config:
         env_file = ".env"
         case_sensitive = False
