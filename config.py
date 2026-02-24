@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     
     # Apollo API
     apollo_api_key: Optional[str] = None
+    
+    # Production Email Dispatcher
+    send_real_emails: bool = False
+    shilpi_crm_email: Optional[str] = None
+    shilpi_crm_password: Optional[str] = None
+    shilpi_crm_access_token: Optional[str] = None
 
     class Config:
         env_file = ".env"

@@ -1,15 +1,18 @@
 import asyncio
 import logging
 from typing import Dict, Any
+import requests
+
+from config import settings
 
 logger = logging.getLogger(__name__)
 
 class EmailQueueService:
     """
     Background worker service that polls an asyncio.Queue and processes
-    emails sequentially with a deliberate delay between each send.
+    emails sequentially with a deliberate delay between each send (15 minutes for production).
     """
-    def __init__(self, delay_seconds: int = 60, send_real_emails: bool = False):
+    def __init__(self, delay_seconds: int = 900, send_real_emails: bool = settings.send_real_emails):
         self.queue = asyncio.Queue()
         self.delay_seconds = delay_seconds
         self.send_real_emails = send_real_emails
@@ -50,26 +53,72 @@ class EmailQueueService:
                 to_name = payload.get("to_name")
                 subject = payload.get("subject")
                 body = payload.get("body")
+                result_id = payload.get("result_id", "N/A")
+                already_emailed = payload.get("already_emailed", False)
                 
-                logger.info(f"📧 Processing queued email for {to_name} <{to_addr}>...")
+                logger.info(f"📧 Processing queued email for {to_name} <{to_addr}> (Result ID: {result_id})...")
                 
                 # Development / Testing phase logic
                 if not self.send_real_emails:
                     print("\n" + "="*60)
                     print(f"  [DEV MODE] Simulated Email Dispatch")
                     print("="*60)
-                    print(f"  To     : {to_name} <{to_addr}>")
-                    print(f"  Subject: {subject}")
+                    print(f"  To             : {to_name} <{to_addr}>")
+                    print(f"  Subject        : {subject}")
+                    print(f"  SalesTechBE ID : {result_id}")
+                    print(f"  Already Sent?  : {already_emailed}")
                     print("-"*60)
                     print(body)
                     print("="*60 + "\n")
                     logger.info(f"✅ [DEV MODE] Simulated send to {to_addr}")
                 else:
-                    # In true production, here you would:
-                    # 1. Obtain JWT token from SalesTechBE
-                    # 2. POST to /gamil/send_mail/
-                    # We leave this disabled for now as per user request to just print it
-                    logger.warning(f"⚠️ Real email dispatch is currently configured but logic is mocked. Sending to {to_addr}")
+                    # In actual production, hit the core SalesTechBE endpoint
+                    try:
+                        logger.info(f"🚀 [PRODUCTION] Executing real HTTP POST to SalesTechBE for {to_addr}... ")
+                        
+                        if not settings.shilpi_crm_email or not settings.shilpi_crm_password:
+                            logger.error("❌ CRITICAL: Shilpi CRM Auth is missing from config. Cannot send real email.")
+                        else:
+                            # 1. Always Auth to ensure valid token for long queues
+                            auth_resp = requests.post(f"{settings.crm_base_url}/token/obtain/", json={
+                                "email": settings.shilpi_crm_email,
+                                "password": settings.shilpi_crm_password
+                            }, timeout=10)
+                            
+                            if auth_resp.status_code == 200:
+                                jwt_token = auth_resp.json().get("access")
+                                headers = {
+                                    "Authorization": f"Bearer {jwt_token}",
+                                    "Content-Type": "application/json"
+                                }
+                                
+                                # 2. Send the outbound email
+                                endpoint = f"{settings.crm_base_url}/gamil/send_mail/"
+                                mail_payload = {
+                                    "to": to_addr,
+                                    "subject": subject,
+                                    "body": body
+                                }
+                                
+                                req = requests.post(endpoint, headers=headers, json=mail_payload, timeout=20)
+                                if req.status_code == 200:
+                                    logger.info(f"✅ Success: Real email dispatched via Shilpi Bhatia to {to_addr}")
+                                    
+                                    # 3. Mark Record as Sent
+                                    if result_id != "N/A":
+                                        mark_req = requests.post(
+                                            f"{settings.crm_base_url}/hiring-outreach-results/{result_id}/send_email/",
+                                            headers=headers,
+                                            timeout=10
+                                        )
+                                        if mark_req.status_code == 200:
+                                            logger.info(f"✅ Marked Outreach Result ID {result_id} as email_sent in SalesTechBE")
+                                else:
+                                    logger.error(f"❌ Failed to dispatch real email to {to_addr}: {req.status_code} - {req.text}")
+                            else:
+                                logger.error(f"❌ JobProspectorBE could not authenticate as Shilpi Bhatia: {auth_resp.text}")
+                    except Exception as e:
+                        logger.error(f"❌ HTTP Exception sending real email to {to_addr}: {e}")
                 
                 self.queue.task_done()
                 
@@ -86,4 +135,4 @@ class EmailQueueService:
                 await asyncio.sleep(self.delay_seconds)
 
 # Global singleton instance for the app to use
-email_queue = EmailQueueService(delay_seconds=60, send_real_emails=False)
+email_queue = EmailQueueService(delay_seconds=900, send_real_emails=settings.send_real_emails)

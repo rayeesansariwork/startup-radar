@@ -200,7 +200,7 @@ def _detect_team(company: dict) -> str:
 
 
 CTA_BANNER = (
-    '\n\n<a href="https://calendly.com/shilpibhatia-gravity/30min" target="_blank">'
+    '\n\n<a href="https://sales.polluxa.com/ext/meeting/574EEC5864/meeting" target="_blank">'
     '<img src="https://ci3.googleusercontent.com/mail-sig/AIorK4zzPing2FyYjR1YFA-fvADgwE2cUWzzqE3RXGzQjp5AKHwa7Prc33GyN-XnlAjsCkWjxa_f7p2rlRNd" '
     'width="100" height="29" alt="Book a meeting with Gravity Engineering" '
     'style="display:block;border:none;" /></a>'
@@ -320,7 +320,7 @@ def generate_mail(
 
     body_para2 = "We can provide the same level of talent at a much lower cost. We place pre-vetted engineers into your team full time, remote or onsite, based on what works best for you. They plug into your workflow and start contributing fast."
 
-    body_para3 = "If this helps your hiring plans, I would love to support your growth. We can provide the right resources based on your needs and budget. If you want to discuss this, please book a slot here: https://calendly.com/shilpibhatia-gravity/30min"
+    body_para3 = "If this helps your hiring plans, I would love to support your growth. We can provide the right resources based on your needs and budget. If you want to discuss this, please book a slot here: https://sales.polluxa.com/ext/meeting/574EEC5864/meeting"
     
     body = f"{opening_greeting}\n\n{body_para1}\n\n{body_para2}\n\n{body_para3}{FULL_SIGNATURE}"
 
@@ -530,17 +530,8 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
                         company, contacts[0], result_entry["custom_mail"]
                     )
                     result_entry["personalized_email"] = personalized
-                    
-                    # ── Queue the email for staggered dispatch ──
-                    payload = {
-                        "to": personalized["to"],
-                        "to_name": personalized["to_name"],
-                        "subject": personalized["subject"],
-                        "body": personalized["body"]
-                    }
-                    await email_queue.enqueue_email(payload)
                     yield _sse("log", {
-                        "message": f"   ⏳ Sent to staggered queue for {personalized['to']} ({personalized['to_title']})"
+                        "message": f"   ✉️  Personalized email prepared for {personalized['to']} ({personalized['to_title']})"
                     })
             else:
                 yield _sse("log", {"message": f"   ⚠️ No contacts found by Apollo for {domain}."})
@@ -583,8 +574,32 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
             timeout=REQUEST_TIMEOUT,
         )
         if persist_resp.status_code == 201:
-            saved = persist_resp.json().get("created", 0)
+            data = persist_resp.json()
+            saved = data.get("created", 0)
+            returned_results = data.get("results", [])
             yield _sse("log", {"message": f"✅ {saved} results saved to database"})
+            
+            # ── Enqueue emails now that we have SalesTechBE IDs ──
+            queued_count = 0
+            for r in returned_results:
+                personalized = r.get("personalized_email")
+                if personalized and r.get("id"):
+                    payload = {
+                        "result_id": r["id"],
+                        "to": personalized["to"],
+                        "to_name": personalized["to_name"],
+                        "subject": personalized["subject"],
+                        "body": personalized["body"],
+                        "already_emailed": r.get("email_sent", False) # The requested boolean 
+                    }
+                    
+                    # Only enqueue if it hasn't somehow already been marked as sent
+                    if not payload["already_emailed"]:
+                        await email_queue.enqueue_email(payload)
+                        queued_count += 1
+            
+            if queued_count > 0:
+                yield _sse("log", {"message": f"⏳ Queued {queued_count} emails for staggered dispatch with DB tracking."})
         else:
             yield _sse("log", {
                 "message": f"⚠️ DB save returned {persist_resp.status_code}: {persist_resp.text[:200]}"

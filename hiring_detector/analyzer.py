@@ -254,7 +254,7 @@ I have been following {company_name} for a while now. You guys are doing great w
 
 We can provide the same level of talent at a much lower cost. We place pre-vetted engineers into your team full time, remote or onsite, based on what works best for you. They plug into your workflow and start contributing fast.
 
-If this helps your hiring plans, I would love to support your growth. We can provide the right resources based on your needs and budget. If you want to discuss this, please book a slot here: https://calendly.com/shilpibhatia-gravity/30min
+If this helps your hiring plans, I would love to support your growth. We can provide the right resources based on your needs and budget. If you want to discuss this, please book a slot here: https://sales.polluxa.com/ext/meeting/574EEC5864/meeting
 --- END TEMPLATE ---
 
 Context:
@@ -294,7 +294,7 @@ Return ONLY valid JSON, no markdown fences:
 
                 # Ensure signature is always present and correctly formatted
                 cta_banner = (
-                    '\n\n<a href="https://calendly.com/shilpibhatia-gravity/30min" target="_blank">'
+                    '\n\n<a href="https://sales.polluxa.com/ext/meeting/574EEC5864/meeting" target="_blank">'
                     '<img src="https://ci3.googleusercontent.com/mail-sig/AIorK4zzPing2FyYjR1YFA-fvADgwE2cUWzzqE3RXGzQjp5AKHwa7Prc33GyN-XnlAjsCkWjxa_f7p2rlRNd" '
                     'width="100" height="29" alt="Book a meeting with Gravity Engineering" '
                     'style="display:block;border:none;" /></a>'
