@@ -209,7 +209,7 @@ Return ONLY a JSON array of cleaned job titles:
         company_name: str,
         job_roles: List[str],
         funding_info: Optional[str] = None,
-        sender_email: str = "shilpibhatiya@gravityer.com",
+        sender_email: str = "shilpi.bhatia@gravityer.com",
         max_retries: int = 2
     ) -> Optional[Dict]:
         """
@@ -303,7 +303,7 @@ Return ONLY valid JSON, no markdown fences:
                     "\n\nShilpi Bhatia\n"
                     "Senior BDM\n"
                     "Gravity Engineering Services Pvt Ltd.\n"
-                    "shilpibhatiya@gravityer.com"
+                    "shilpi.bhatia@gravityer.com"
                 )
                 # Strip any partial signature the LLM may have appended, then re-add ours
                 for marker in ["Shilpi Bhatia", "Senior BDM", "Gravity Engineering"]:

@@ -210,7 +210,7 @@ SIGNATURE = (
     "\n\nShilpi Bhatia\n"
     "Senior BDM\n"
     "Gravity Engineering Services Pvt Ltd.\n"
-    "shilpibhatiya@gravityer.com"
+    "shilpi.bhatia@gravityer.com"
 )
 
 FULL_SIGNATURE = SIGNATURE + CTA_BANNER
