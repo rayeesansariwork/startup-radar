@@ -551,15 +551,18 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
                 except Exception as e:
                     logger.error("Error syncing Apollo contacts to SalesTechBE for %s: %s", name, e)
 
-                # Personalize mail to the first (highest-priority) contact
+                # Personalize mail to all found contacts
                 if result_entry["custom_mail"]:
-                    personalized = generate_personalized_mail(
-                        company, contacts[0], result_entry["custom_mail"]
-                    )
-                    result_entry["personalized_email"] = personalized
-                    yield _sse("log", {
-                        "message": f"   ✉️  Personalized email prepared for {personalized['to']} ({personalized['to_title']})"
-                    })
+                    personalized_list = []
+                    for contact in contacts:
+                        personalized = generate_personalized_mail(
+                            company, contact, result_entry["custom_mail"]
+                        )
+                        personalized_list.append(personalized)
+                        yield _sse("log", {
+                            "message": f"   ✉️  Personalized email prepared for {personalized['to']} ({personalized['to_title']})"
+                        })
+                    result_entry["personalized_email"] = personalized_list
             else:
                 yield _sse("log", {"message": f"   ⚠️ No contacts found by Apollo for {domain}."})
 
@@ -615,31 +618,36 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
             # ── Enqueue emails now that we have SalesTechBE IDs ──
             queued_count = 0
             for r in returned_results:
-                personalized = r.get("personalized_email")
-                if personalized and r.get("id"):
-                    payload = {
-                        "result_id": r["id"],
-                        "to": personalized["to"],
-                        "to_name": personalized["to_name"],
-                        "subject": personalized["subject"],
-                        "body": personalized["body"],
-                        "already_emailed": r.get("email_sent", False) # The requested boolean 
-                    }
+                personalized_data = r.get("personalized_email")
+                if personalized_data and r.get("id"):
+                    # Handle both new (list) and old (dict) structures
+                    emails_to_send = personalized_data if isinstance(personalized_data, list) else [personalized_data]
+                    already_emailed = r.get("email_sent", False) # The requested boolean 
                     
                     # Only enqueue if it hasn't somehow already been marked as sent
-                    if not payload["already_emailed"]:
-                        try:
-                            # Try native async enqueue (works on the HTTP SSE path)
-                            cur_loop = asyncio.get_event_loop()
-                            if email_queue._main_loop and cur_loop is not email_queue._main_loop:
-                                # We are on the cron thread's separate loop — use threadsafe bridge
+                    if not already_emailed:
+                        for personalized in emails_to_send:
+                            payload = {
+                                "result_id": r["id"],
+                                "to": personalized["to"],
+                                "to_name": personalized["to_name"],
+                                "subject": personalized["subject"],
+                                "body": personalized["body"],
+                                "already_emailed": False 
+                            }
+                            
+                            try:
+                                # Try native async enqueue (works on the HTTP SSE path)
+                                cur_loop = asyncio.get_event_loop()
+                                if email_queue._main_loop and cur_loop is not email_queue._main_loop:
+                                    # We are on the cron thread's separate loop — use threadsafe bridge
+                                    email_queue.enqueue_threadsafe(payload)
+                                else:
+                                    await email_queue.enqueue_email(payload)
+                            except RuntimeError:
+                                # No running loop — use threadsafe bridge
                                 email_queue.enqueue_threadsafe(payload)
-                            else:
-                                await email_queue.enqueue_email(payload)
-                        except RuntimeError:
-                            # No running loop — use threadsafe bridge
-                            email_queue.enqueue_threadsafe(payload)
-                        queued_count += 1
+                            queued_count += 1
             
             if queued_count > 0:
                 yield _sse("log", {"message": f"⏳ Queued {queued_count} emails for staggered dispatch with DB tracking."})
