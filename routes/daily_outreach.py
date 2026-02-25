@@ -289,14 +289,14 @@ def generate_mail(
 
     # Funding congratulations line
     if funded and snippet:
-        funding_congrats = f"Congrats on the {snippet}. I am really happy to see your growth."
+        funding_congrats = f"— congratulations on raising {snippet}. That milestone truly reflects the strength of your vision and execution."
     elif funded:
-        funding_congrats = "Congrats on the recent funding. I am really happy to see your growth."
+        funding_congrats = "— congratulations on the recent funding. That milestone truly reflects the strength of your vision and execution."
     else:
-        funding_congrats = "You guys are doing great work and the growth is clearly showing."
+        funding_congrats = "— I've been really impressed by the strength of your vision and execution."
 
     opening_greeting = f"Hey {name} team,"
-    opening_sentence = f"I have been following {name} for a while now. {funding_congrats}"
+    opening_sentence = f"I’ve been following {name}’s journey for some time now {funding_congrats}"
 
     # ── Tailored email (hiring = True) ──────────────────────────────────
     if is_hiring and roles:
@@ -305,24 +305,26 @@ def generate_mail(
         else:
             role_list = ", ".join(roles[:3]) + " and more"
             
-        subject = f"{name} - {team} roles"
-        body_para1 = f"{opening_sentence} I was checking your careers page and LinkedIn and I saw that you are hiring {role_list}. You already know how high the market rates are for these roles."
+        subject = f"Supporting {name}’s expansion plans - {team}"
+        body_para1 = f"While reviewing your careers page and LinkedIn, I noticed openings across several strategic roles, including {role_list}. Given the competitive market, hiring for these roles can be both time-consuming and expensive."
 
     # ── Hiring but no role details ──────────────────────────────────────
     elif is_hiring:
-        subject = f"{name} - {team} roles"
-        body_para1 = f"{opening_sentence} I was checking your careers page and LinkedIn and I saw that you are actively hiring for your {team} team. You already know how high the market rates are for these roles."
+        subject = f"Supporting {name}’s expansion plans - {team}"
+        body_para1 = f"While reviewing your careers page and LinkedIn, I noticed you are actively hiring for your {team} team. Given the competitive market, hiring for these roles can be both time-consuming and expensive."
 
     # ── Generic nurture email (not hiring) ──────────────────────────────
     else:
-        subject = f"{name} - Growth & Engineering team"
-        body_para1 = f"{opening_sentence} As you continue to scale your {team} team, you already know how high the market rates are for these roles across regions."
+        subject = f"Supporting {name}’s expansion plans"
+        body_para1 = f"Given the competitive market, as you continue to scale your {team} team, hiring can be both time-consuming and expensive."
 
-    body_para2 = "We can provide the same level of talent at a much lower cost. We place pre-vetted engineers into your team full time, remote or onsite, based on what works best for you. They plug into your workflow and start contributing fast."
+    body_para2 = "At Gravity Engineering Services (www.gravityer.com), we specialize in delivering the top 3% of pre-vetted global engineering talent through flexible contract engagements. We help high-growth technology companies scale efficiently by providing experienced engineers who integrate seamlessly into existing teams — remotely or onsite — and begin contributing from day one."
 
-    body_para3 = "If this helps your hiring plans, I would love to support your growth. We can provide the right resources based on your needs and budget. If you want to discuss this, please book a slot here: https://sales.polluxa.com/ext/meeting/574EEC5864/meeting"
+    body_para3 = f"If optimizing cost without compromising quality is part of your hiring strategy, I would welcome the opportunity to explore how we can support {name}’s expansion plans."
+    body_para4 = "Please feel free to share a suitable time, or I’d be happy to coordinate based on your availability. You can also book a time directly here: https://sales.polluxa.com/ext/meeting/574EEC5864/meeting"
     
-    body = f"{opening_greeting}\n\n{body_para1}\n\n{body_para2}\n\n{body_para3}{FULL_SIGNATURE}"
+    # We use a single \n here because FULL_SIGNATURE already starts with \n\n, and we don't want a huge gap
+    body = f"{opening_greeting}\n\n{opening_sentence}\n\n{body_para1}\n\n{body_para2}\n\n{body_para3}\n\n{body_para4}{FULL_SIGNATURE}"
 
     return {"subject": subject, "body": body, "team_focus": team}
 

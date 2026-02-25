@@ -239,9 +239,9 @@ Return ONLY a JSON array of cleaned job titles:
 
         # Funding congratulations line — only when we have real data
         if funding_info:
-            funding_congrats = f"Congrats on the {funding_info}. I am really happy to see your growth."
+            funding_congrats = f"— congratulations on raising {funding_info}. That milestone truly reflects the strength of your vision and execution."
         else:
-            funding_congrats = "You guys are doing great work and the growth is clearly showing."
+            funding_congrats = "— I've been really impressed by the strength of your vision and execution."
 
         prompt = f"""Write a warm B2B cold outreach email from Shilpi Bhatia (Senior BDM, Gravity Engineering Services) to a hiring contact at {company_name}.
 
@@ -250,11 +250,15 @@ Follow this EXACT structure and tone. Fill in the bracketed parts with real valu
 --- TEMPLATE ---
 Hey [first name if known, else send an generic greeting line of Hey {company_name} team],
 
-I have been following {company_name} for a while now. You guys are doing great work. {funding_congrats} I was checking your careers page and LinkedIn and I saw that you are hiring {roles_sample}. You already know how high the market rates are for these roles.
+I’ve been following {company_name}’s journey for some time now {funding_congrats}
 
-We can provide the same level of talent at a much lower cost. We place pre-vetted engineers into your team full time, remote or onsite, based on what works best for you. They plug into your workflow and start contributing fast.
+While reviewing your careers page and LinkedIn, I noticed openings across several strategic roles, including {roles_sample}. Given the competitive market, hiring for these roles can be both time-consuming and expensive.
 
-If this helps your hiring plans, I would love to support your growth. We can provide the right resources based on your needs and budget. If you want to discuss this, please book a slot here: https://sales.polluxa.com/ext/meeting/574EEC5864/meeting
+At Gravity Engineering Services (www.gravityer.com), we specialize in delivering the top 3% of pre-vetted global engineering talent through flexible contract engagements. We help high-growth technology companies scale efficiently by providing experienced engineers who integrate seamlessly into existing teams — remotely or onsite — and begin contributing from day one.
+
+If optimizing cost without compromising quality is part of your hiring strategy, I would welcome the opportunity to explore how we can support {company_name}’s expansion plans.
+
+Please feel free to share a suitable time, or I’d be happy to coordinate based on your availability. You can also book a time directly here: https://sales.polluxa.com/ext/meeting/574EEC5864/meeting
 --- END TEMPLATE ---
 
 Context:
@@ -267,12 +271,12 @@ Hard rules:
 - Do NOT add extra paragraphs, bullet points, or marketing language
 - Do NOT use em dashes or smart quotes
 - Do NOT fabricate facts beyond what is given
-- If no recipient first name is available, start directly with "I have been following..."
-- Keep word count between 100-130 words (body only, excluding signature)
+- If no recipient first name is available, start directly with "I’ve been following..."
+- Keep word count to about 120-150 words (body only, excluding signature)
 
 Return ONLY valid JSON, no markdown fences:
 {{
-  "subject": "specific subject line referencing {company_name} and the role type (max 10 words)",
+  "subject": "specific subject line about supporting {company_name}'s expansion plans (max 10 words)",
   "body": "full email body with \\n\\n between paragraphs",
   "team_focus": "{team_focus}"
 }}"""
@@ -306,10 +310,14 @@ Return ONLY valid JSON, no markdown fences:
                     "shilpi.bhatia@gravityer.com"
                 )
                 # Strip any partial signature the LLM may have appended, then re-add ours
-                for marker in ["Shilpi Bhatia", "Senior BDM", "Gravity Engineering"]:
+                for marker in ["Shilpi Bhatia", "Senior BDM", "Best,", "Best regards", "Sincerely", "Thanks,", "cheers,"]:
+                    # Ensure case-insensitive or specifically matched markers to avoid truncating valid body text
                     if marker in body:
-                        body = body[:body.index(marker)].rstrip()
-                        break
+                        # only strip if it's near the end of the text to prevent rare false positives
+                        if body.rindex(marker) > len(body) * 0.5:
+                            body = body[:body.rindex(marker)].rstrip()
+                            break
+                            
                 body = body + signature + cta_banner 
 
                 if not body or not subject:
