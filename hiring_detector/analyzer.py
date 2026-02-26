@@ -230,53 +230,48 @@ Return ONLY a JSON array of cleaned job titles:
 
         team_focus = _infer_team(job_roles)
         roles_sample = ", ".join(job_roles[:6])  # keep prompt concise
-
-        # Build the funding line only when real data exists
-        if funding_info:
-            funding_line = f"They recently received funding ({funding_info}) and are scaling fast."
-        else:
-            funding_line = "They are actively scaling their team."
+        # Role summary for subject line: use first role or team focus label
+        subject_role_hint = job_roles[0] if job_roles else team_focus
 
         # Funding congratulations line — only when we have real data
         if funding_info:
-            funding_congrats = f"— congratulations on raising {funding_info}. That milestone truly reflects the strength of your vision and execution."
+            funding_congrats = f"Saw the news on {funding_info} - an incredible milestone for {company_name}."
         else:
-            funding_congrats = "— I've been really impressed by the strength of your vision and execution."
+            funding_congrats = ""
 
-        prompt = f"""Write a warm B2B cold outreach email from Shilpi Bhatia (Senior BDM, Gravity Engineering Services) to a hiring contact at {company_name}.
+        prompt = f"""Write a highly concise, warm B2B cold outreach email from Shilpi Bhatia (Gravity Engineering Services) to a hiring decision-maker at {company_name}.
 
-Follow this EXACT structure and tone. Fill in the bracketed parts with real values from the context below. Do not change the sentence structure -- only swap in the right details.
+Follow this EXACT structure and tone. Only swap in the details from the context below — do NOT change sentence structure or add extra sections. Keep it extremely brief and punchy.
 
 --- TEMPLATE ---
-Hey [first name if known, else send an generic greeting line of Hey {company_name} team],
+Subject: Scaling {company_name} | {subject_role_hint}
 
-I’ve been following {company_name}’s journey for some time now {funding_congrats}
+Hi [recipient first name, or just omit the greeting line if unknown],
 
-While reviewing your careers page and LinkedIn, I noticed openings across several strategic roles, including {roles_sample}. Given the competitive market, hiring for these roles can be both time-consuming and expensive.
+{funding_congrats}
+Noticed {company_name} is hiring for roles like {roles_sample}. As you scale, I'd love to share how Gravity helped companies like <b>New Balance</b>, <b>Landmark Group</b> etc. to build thier elite teams.
 
-At Gravity Engineering Services (www.gravityer.com), we specialize in delivering the top 3% of pre-vetted global engineering talent through flexible contract engagements. We help high-growth technology companies scale efficiently by providing experienced engineers who integrate seamlessly into existing teams — remotely or onsite — and begin contributing from day one.
-
-If optimizing cost without compromising quality is part of your hiring strategy, I would welcome the opportunity to explore how we can support {company_name}’s expansion plans.
-
-Please feel free to share a suitable time, or I’d be happy to coordinate based on your availability. You can also book a time directly here: https://sales.polluxa.com/ext/meeting/574EEC5864/meeting
+We deliver pre-vetted, <b>top 3%</b> global {subject_role_hint}s who integrate seamlessly from day one. If optimizing costs without compromising technical leadership is a priority, do you have <b>10 mins</b> next week?
 --- END TEMPLATE ---
 
 Context:
 - Company: {company_name}
-- Hiring for ({team_focus}): {roles_sample}
-- {funding_line}
+- Open roles ({team_focus}): {roles_sample}
+- Funding / context: {funding_info or 'No specific funding info available'}
 
 Hard rules:
-- Keep the tone exactly as shown: warm, human, conversational. Not salesy.
-- Do NOT add extra paragraphs, bullet points, or marketing language
+- Tone: warm, human, direct. NOT salesy or corporate.
+- Keep body under 80 words (excluding signature)
+- Keep ALL HTML <b> tags exactly as shown in the template
+- Do NOT add bullet points, extra paragraphs, or marketing fluff
 - Do NOT use em dashes or smart quotes
 - Do NOT fabricate facts beyond what is given
-- If no recipient first name is available, start directly with "I’ve been following..."
-- Keep word count to about 120-150 words (body only, excluding signature)
+- If no recipient first name is available, skip the greeting line and start with the funding/roles sentence
+- The subject line MUST follow the format: Scaling {company_name} | <role summary>
 
 Return ONLY valid JSON, no markdown fences:
 {{
-  "subject": "specific subject line about supporting {company_name}'s expansion plans (max 10 words)",
+  "subject": "Scaling {company_name} | {subject_role_hint}",
   "body": "full email body with \\n\\n between paragraphs",
   "team_focus": "{team_focus}"
 }}"""
@@ -298,27 +293,23 @@ Return ONLY valid JSON, no markdown fences:
 
                 # Ensure signature is always present and correctly formatted
                 cta_banner = (
-                    '\n\n<a href="https://sales.polluxa.com/ext/meeting/574EEC5864/meeting" target="_blank">'
-                    '<img src="https://ci3.googleusercontent.com/mail-sig/AIorK4zzPing2FyYjR1YFA-fvADgwE2cUWzzqE3RXGzQjp5AKHwa7Prc33GyN-XnlAjsCkWjxa_f7p2rlRNd" '
-                    'width="100" height="29" alt="Book a meeting with Gravity Engineering" '
-                    'style="display:block;border:none;" /></a>'
+                    '\n\n<img src="https://ci3.googleusercontent.com/mail-sig/AIorK4zzPing2FyYjR1YFA-fvADgwE2cUWzzqE3RXGzQjp5AKHwa7Prc33GyN-XnlAjsCkWjxa_f7p2rlRNd" '
+                    'width="100" height="29" alt="Gravity Engineering" '
+                    'style="display:block;border:none;" />'
                 )
                 signature = (
-                    "\n\nShilpi Bhatia\n"
-                    "Senior BDM\n"
-                    "Gravity Engineering Services Pvt Ltd.\n"
-                    "shilpi.bhatia@gravityer.com"
+                    "\n\nBest,\n"
+                    "Shilpi Bhatia"
                 )
                 # Strip any partial signature the LLM may have appended, then re-add ours
-                for marker in ["Shilpi Bhatia", "Senior BDM", "Best,", "Best regards", "Sincerely", "Thanks,", "cheers,"]:
-                    # Ensure case-insensitive or specifically matched markers to avoid truncating valid body text
+                for marker in ["Best,", "Shilpi Bhatia", "Senior BDM", "Best regards", "Sincerely", "Thanks,", "cheers,"]:
                     if marker in body:
                         # only strip if it's near the end of the text to prevent rare false positives
                         if body.rindex(marker) > len(body) * 0.5:
                             body = body[:body.rindex(marker)].rstrip()
                             break
                             
-                body = body + signature + cta_banner 
+                body = body + signature + cta_banner
 
                 if not body or not subject:
                     raise ValueError("Empty subject or body in response")

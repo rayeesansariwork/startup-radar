@@ -200,17 +200,14 @@ def _detect_team(company: dict) -> str:
 
 
 CTA_BANNER = (
-    '\n\n<a href="https://sales.polluxa.com/ext/meeting/574EEC5864/meeting" target="_blank">'
-    '<img src="https://ci3.googleusercontent.com/mail-sig/AIorK4zzPing2FyYjR1YFA-fvADgwE2cUWzzqE3RXGzQjp5AKHwa7Prc33GyN-XnlAjsCkWjxa_f7p2rlRNd" '
-    'width="100" height="29" alt="Book a meeting with Gravity Engineering" '
-    'style="display:block;border:none;" /></a>'
+    '\n\n<img src="https://ci3.googleusercontent.com/mail-sig/AIorK4zzPing2FyYjR1YFA-fvADgwE2cUWzzqE3RXGzQjp5AKHwa7Prc33GyN-XnlAjsCkWjxa_f7p2rlRNd" '
+    'width="100" height="29" alt="Gravity Engineering" '
+    'style="display:block;border:none;" />'
 )
 
 SIGNATURE = (
-    "\n\nShilpi Bhatia\n"
-    "Senior BDM\n"
-    "Gravity Engineering Services Pvt Ltd.\n"
-    "shilpi.bhatia@gravityer.com"
+    "\n\nBest,\n"
+    "Shilpi Bhatia"
 )
 
 FULL_SIGNATURE = SIGNATURE + CTA_BANNER
@@ -278,8 +275,8 @@ def generate_mail(
     job_roles: list[str] | None = None,
 ) -> dict:
     """
-    Generate an outreach email snippet following exactly the same structure
-    and tone as the AI generated ones in analyzer.py.
+    Generate an outreach email following the same structure as the AI-generated
+    emails but using a deterministic template (no Mistral call needed).
     """
     name = company.get("company_name", "there")
     funded = _has_funding_signal(company)
@@ -287,44 +284,47 @@ def generate_mail(
     team = _detect_team(company)
     roles = job_roles or []
 
+    # Role label for subject + body
+    primary_role = roles[0] if roles else team
+
+    # Subject: Scaling {Company} | {role summary}
+    subject = f"Scaling {name} | {primary_role}"
+
     # Funding congratulations line
     if funded and snippet:
-        funding_congrats = f"— congratulations on raising {snippet}. That milestone truly reflects the strength of your vision and execution."
+        funding_line = f"Saw the news on {snippet} - an incredible milestone for {name}."
     elif funded:
-        funding_congrats = "— congratulations on the recent funding. That milestone truly reflects the strength of your vision and execution."
+        funding_line = f"Saw the news on the recent funding - an incredible milestone for {name}."
     else:
-        funding_congrats = "— I've been really impressed by the strength of your vision and execution."
+        funding_line = ""
 
-    opening_greeting = f"Hey {name} team,"
-    opening_sentence = f"I’ve been following {name}’s journey for some time now {funding_congrats}"
-
-    # ── Tailored email (hiring = True) ──────────────────────────────────
+    # Roles paragraph
     if is_hiring and roles:
         if len(roles) <= 3:
-            role_list = " and ".join([", ".join(roles[:-1]), roles[-1]] if len(roles) > 1 else roles)
+            role_list = ", ".join(roles)
         else:
             role_list = ", ".join(roles[:3]) + " and more"
-            
-        subject = f"Supporting {name}’s expansion plans - {team}"
-        body_para1 = f"While reviewing your careers page and LinkedIn, I noticed openings across several strategic roles, including {role_list}. Given the competitive market, hiring for these roles can be both time-consuming and expensive."
-
-    # ── Hiring but no role details ──────────────────────────────────────
+        roles_sentence = f"Noticed {name} is hiring for roles like {role_list}."
     elif is_hiring:
-        subject = f"Supporting {name}’s expansion plans - {team}"
-        body_para1 = f"While reviewing your careers page and LinkedIn, I noticed you are actively hiring for your {team} team. Given the competitive market, hiring for these roles can be both time-consuming and expensive."
-
-    # ── Generic nurture email (not hiring) ──────────────────────────────
+        roles_sentence = f"Noticed you are actively scaling your {team} team."
     else:
-        subject = f"Supporting {name}’s expansion plans"
-        body_para1 = f"Given the competitive market, as you continue to scale your {team} team, hiring can be both time-consuming and expensive."
+        roles_sentence = f"As you continue to grow, I wanted to share how we help companies like {name} build great {team} teams."
 
-    body_para2 = "At Gravity Engineering Services (www.gravityer.com), we specialize in delivering the top 3% of pre-vetted global engineering talent through flexible contract engagements. We help high-growth technology companies scale efficiently by providing experienced engineers who integrate seamlessly into existing teams — remotely or onsite — and begin contributing from day one."
+    body_parts = []
 
-    body_para3 = f"If optimizing cost without compromising quality is part of your hiring strategy, I would welcome the opportunity to explore how we can support {name}’s expansion plans."
-    body_para4 = "Please feel free to share a suitable time, or I’d be happy to coordinate based on your availability. You can also book a time directly here: https://sales.polluxa.com/ext/meeting/574EEC5864/meeting"
-    
-    # We use a single \n here because FULL_SIGNATURE already starts with \n\n, and we don't want a huge gap
-    body = f"{opening_greeting}\n\n{opening_sentence}\n\n{body_para1}\n\n{body_para2}\n\n{body_para3}\n\n{body_para4}{FULL_SIGNATURE}"
+    if funding_line:
+        body_parts.append(funding_line)
+
+    body_parts.append(
+        f"{roles_sentence} As you scale, I'd love to share how Gravity helped companies like <b>New Balance</b>, <b>Landmark Group</b> etc. to build thier elite teams."
+    )
+
+    body_parts.append(
+        f"We deliver pre-vetted, <b>top 3%</b> global {primary_role}s who integrate seamlessly from day one. "
+        "If optimizing costs without compromising technical leadership is a priority, do you have <b>10 mins</b> next week?"
+    )
+
+    body = "\n\n".join(body_parts) + FULL_SIGNATURE
 
     return {"subject": subject, "body": body, "team_focus": team}
 
