@@ -576,7 +576,7 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
         domain = (website or "").replace("https://", "").replace("http://", "").strip("/")
         if domain:
             yield _sse("log", {"message": f"   📇 Searching Apollo for contacts at {domain}..."})
-            contacts = await loop.run_in_executor(None, apollo_service.find_csuite_contacts, domain, 3)
+            contacts = await loop.run_in_executor(None, apollo_service.find_csuite_contacts, domain, name, 3)
             result_entry["found_contacts"] = contacts
             
             if contacts:
