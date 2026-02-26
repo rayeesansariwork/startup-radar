@@ -330,20 +330,48 @@ def generate_mail(
 
 
 def generate_personalized_mail(
-    company: dict, contact: dict, base_mail: dict
+    company: dict, contact: dict, all_contacts: list[dict], base_mail: dict
 ) -> dict:
     """
-    Re-address a generated email to a specific C-suite contact.
+    Re-address a generated email to a specific C-suite contact and cross-reference others.
     Returns {"to", "to_name", "to_title", "subject", "body"}.
     """
     first_name = contact["name"].split()[0]
     company_name = company.get("company_name", "there")
 
-    # Replace generic "Hey <Company> team" with "Hey <FirstName>"
+    # Pick a secondary contact to mention
+    secondary_contact = None
+    priority_titles = ["CTO", "VP Engineering", "COO", "CEO", "VP Sales"]
+    
+    other_contacts = [c for c in all_contacts if c["email"] != contact["email"]]
+    
+    if other_contacts:
+        # Sort by priority to try and mention the most relevant technical peer if possible
+        def get_priority(c):
+            try:
+                return priority_titles.index(c.get("title", ""))
+            except ValueError:
+                return 999
+        
+        other_contacts.sort(key=get_priority)
+        secondary_contact = other_contacts[0]
+
+    greeting = f"Hi {first_name},\n\n"
+    
+    if secondary_contact:
+        sec_name = secondary_contact["name"].split()[0]
+        sec_title = secondary_contact["title"]
+        cross_ref = f"I'm also reaching out to {sec_name}, your {sec_title}, but wanted to drop you a quick note as well.\n\n"
+        greeting += cross_ref
+
+    # Clean up any residual placeholders Mistral might have theoretically left behind
     body = base_mail["body"].replace(
-        f"Hey {company_name} team",
-        f"Hey {first_name}",
-    )
+        "Hi [recipient first name, or just omit the greeting line if unknown],\n\n", ""
+    ).replace(
+        f"Hey {company_name} team,\n\n", ""
+    ).strip()
+    
+    body = f"{greeting}{body}"
 
     return {
         "to": contact["email"],
@@ -352,6 +380,26 @@ def generate_personalized_mail(
         "subject": base_mail["subject"],
         "body": body,
     }
+
+
+def fetch_processed_companies(token: str) -> set[str]:
+    """
+    Fetch the list of company names that already have Apollo contacts saved.
+    Returns a set for fast lookup to prevent wasting Mistral/Apollo credits.
+    """
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{CRM_BASE_URL}/hiring-outreach-results/processed_companies/"
+    
+    try:
+        resp = sync_requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+        if resp.status_code == 200:
+            return set(resp.json())
+        else:
+            logger.warning("⚠️ Failed to fetch processed companies: %d %s", resp.status_code, resp.text[:100])
+    except Exception as e:
+        logger.error("❌ Error fetching processed companies: %s", e)
+    
+    return set()
 
 
 # ─── SSE stream generator ───────────────────────────────────────────────────
@@ -397,6 +445,11 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
     yield _sse("log", {"message": "🤖 Mistral AI ready (will generate tailored emails for hiring companies)"})
     yield _sse("log", {"message": "🔍 Apollo Service initialized for real contact discovery"})
 
+    # 4) Fetch deduplication list
+    processed_companies_set = await loop.run_in_executor(None, fetch_processed_companies, token)
+    if processed_companies_set:
+        yield _sse("log", {"message": f"🛡️  Deduplication: Found {len(processed_companies_set)} previously processed companies with contacts."})
+
     processed: list[dict] = []
     hiring_calls = 0
     hiring_detected = 0
@@ -406,6 +459,12 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
     for idx, company in enumerate(companies, 1):
         name = company.get("company_name", "Unknown")
         website = company.get("website", "")
+        
+        # ── Deduplication Check ──
+        if name in processed_companies_set:
+            yield _sse("log", {"message": f"[{idx}/{len(companies)}] ⏭️ Skipping {name} — C-suite contacts already processed."})
+            continue
+            
         yield _sse("log", {"message": f"[{idx}/{len(companies)}] Processing {name} …"})
 
         # ── Hiring check ──
@@ -558,7 +617,7 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
                     personalized_list = []
                     for contact in contacts:
                         personalized = generate_personalized_mail(
-                            company, contact, result_entry["custom_mail"]
+                            company, contact, contacts, result_entry["custom_mail"]
                         )
                         personalized_list.append(personalized)
                         yield _sse("log", {
