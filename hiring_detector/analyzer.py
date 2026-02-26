@@ -230,8 +230,9 @@ Return ONLY a JSON array of cleaned job titles:
 
         team_focus = _infer_team(job_roles)
         roles_sample = ", ".join(job_roles[:6])  # keep prompt concise
-        # Role summary for subject line: use first role or team focus label
-        subject_role_hint = job_roles[0] if job_roles else team_focus
+        role_count = len(job_roles)
+        # Build a punchy subject hint: role count + team label
+        subject_role_hint = team_focus
 
         # Funding congratulations line — only when we have real data
         if funding_info:
@@ -267,11 +268,16 @@ Hard rules:
 - Do NOT use em dashes or smart quotes
 - Do NOT fabricate facts beyond what is given
 - If no recipient first name is available, skip the greeting line and start with the funding/roles sentence
-- The subject line MUST follow the format: Scaling {company_name} | <role summary>
+- Subject line MUST always start with "Scaling {company_name} |" followed by a punchy 3-6 word hook:
+  Examples of good subjects:
+  "Scaling {company_name} | {role_count} {team_focus} roles - a thought"
+  "Scaling {company_name} | Building your {team_focus} team faster"
+  "Scaling {company_name} | Top 3% {team_focus} talent, zero search cost"
+  Choose the one that fits best based on context (funding, role count, team type).
 
 Return ONLY valid JSON, no markdown fences:
 {{
-  "subject": "Scaling {company_name} | {subject_role_hint}",
+  "subject": "<your enhanced subject line>",
   "body": "full email body with \\n\\n between paragraphs",
   "team_focus": "{team_focus}"
 }}"""

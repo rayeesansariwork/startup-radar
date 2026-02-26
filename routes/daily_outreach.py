@@ -524,9 +524,8 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
                     funding_info,
                 )
                 if ai_mail and ai_mail.get("body"):
-                    # Append signature if AI didn't include one
-                    if "gravityer.com" not in ai_mail["body"]:
-                        ai_mail["body"] += SIGNATURE
+                    # NOTE: analyzer.py already strips any LLM-written signature and
+                    # re-adds "Best, Shilpi Bhatia" + CTA banner — do NOT append SIGNATURE here.
                     result_entry["custom_mail"] = ai_mail
                     result_entry["mail_source"] = "mistral_ai"
                     mails_generated += 1
