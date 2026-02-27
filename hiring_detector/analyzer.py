@@ -250,7 +250,7 @@ Subject: Scaling {company_name} | {subject_role_hint}
 Hi [recipient first name, or just omit the greeting line if unknown],
 
 {funding_congrats}
-Noticed {company_name} is hiring for roles like {roles_sample}. As you scale, I'd love to share how Gravity helped companies like <b>New Balance</b>, <b>Landmark Group</b> etc. to build thier elite teams.
+Noticed {company_name} is hiring for roles like {roles_sample}. As you scale, I'd love to share how Gravity helped companies like <b>New Balance</b>, <b>Landmark Group</b> etc. to build their elite teams.
 
 We deliver pre-vetted, <b>top 3%</b> global {subject_role_hint}s who integrate seamlessly from day one. If optimizing costs without compromising technical leadership is a priority, do you have <b>10 mins</b> next week?
 --- END TEMPLATE ---

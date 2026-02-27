@@ -304,11 +304,11 @@ def generate_mail(
             role_list = ", ".join(roles)
         else:
             role_list = ", ".join(roles[:3]) + " and more"
-        roles_sentence = f"Noticed {name} is hiring for roles like {role_list}."
+        roles_sentence = f"Noticed {name} is hiring for roles like {role_list}. "
     elif is_hiring:
-        roles_sentence = f"Noticed you are actively scaling your {team} team."
+        roles_sentence = f"Noticed you are actively scaling your {team} team. "
     else:
-        roles_sentence = f"As you continue to grow, I wanted to share how we help companies like {name} build great {team} teams."
+        roles_sentence = ""
 
     body_parts = []
 
@@ -316,7 +316,7 @@ def generate_mail(
         body_parts.append(funding_line)
 
     body_parts.append(
-        f"{roles_sentence} As you scale, I'd love to share how Gravity helped companies like <b>New Balance</b>, <b>Landmark Group</b> etc. to build thier elite teams."
+        f"{roles_sentence}As you scale, I'd love to share how Gravity helped companies like <b>New Balance</b>, <b>Landmark Group</b> etc. to build their elite teams."
     )
 
     body_parts.append(
