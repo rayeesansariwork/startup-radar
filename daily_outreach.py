@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 # ─── Configuration ───────────────────────────────────────────────────────────
 
 CRM_BASE_URL = "https://salesapi.gravityer.com/api/v1"
-HIRING_API_URL = "https://startup-radar.onrender.com/api/hiring"
+HIRING_API_URL = "https://startup-radar-1.onrender.com/api/hiring"
 
 CRM_CREDENTIALS = {
     "email": "sankalp@admin.com",
@@ -224,7 +224,7 @@ def fetch_yesterday_companies(token: str) -> list[dict]:
 def send_to_hiring_api(company: dict) -> dict | None:
     """
     Send a single company to the hiring endpoint for analysis.
-    POST https://startup-radar.onrender.com/api/hiring
+    POST https://startup-radar-1.onrender.com/api/hiring
     """
     payload = {
         "companies": [company]
