@@ -17,6 +17,7 @@ import random
 import re
 import time
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 
@@ -123,12 +124,12 @@ class HiringTriangulator:
         for r in results:
             link = r.get("link", "")
             if any(ats in link for ats in ATS_PROVIDERS):
-                # Validate the URL actually belongs to this company
-                from urllib.parse import urlparse
-                parsed = urlparse(link)
-                path = parsed.path.lower().strip("/")
-                host = parsed.netloc.lower()
-                if company_lower in path or company_lower in host:
+                if not self._is_ats_job_board_link(link):
+                    logger.debug("Skipping ATS non-jobboard link: %s", link)
+                    continue
+                # Validate ATS link belongs to this company (avoid substring false matches:
+                # e.g. "dig" matching "digrestaurants").
+                if self._ats_link_matches_company(company_lower, link):
                     return link, "ATS_Backdoor"
                 else:
                     logger.debug(
@@ -230,3 +231,75 @@ class HiringTriangulator:
         domain = domain.replace("https://", "").replace("http://", "")
         domain = domain.replace("www.", "")
         return domain.split("/")[0].strip()
+
+    @staticmethod
+    def _ats_link_matches_company(company: str, link: str) -> bool:
+        """
+        Determine whether ATS URL likely belongs to the target company.
+        Uses token-level matching, with limited prefix fallback for longer names.
+        """
+        if not company or not link:
+            return False
+
+        parsed = urlparse(link)
+        host = (parsed.netloc or "").lower()
+        path = (parsed.path or "").lower()
+
+        # Extract alphanumeric tokens from host + path.
+        host_tokens = [t for t in re.split(r"[^a-z0-9]+", host) if t]
+        path_tokens = [t for t in re.split(r"[^a-z0-9]+", path) if t]
+        if not (host_tokens or path_tokens):
+            return False
+
+        company = company.lower().strip()
+
+        # Strong signal: exact host token match.
+        if company in host_tokens:
+            return True
+
+        stopwords = {
+            "boards", "jobs", "job", "careers", "career", "postings", "posting",
+            "api", "v0", "v1", "products", "product", "store", "company",
+        }
+        path_candidates = [t for t in path_tokens if t not in stopwords]
+        if not path_candidates:
+            return False
+
+        # For short company names, require exact first candidate match to avoid false positives.
+        if len(company) < 5:
+            return path_candidates[0] == company
+
+        if company in path_candidates:
+            return True
+
+        # Prefix fallback for longer names only.
+        if len(company) >= 5:
+            for token in path_candidates:
+                if token.startswith(company):
+                    return True
+
+        return False
+
+    @staticmethod
+    def _is_ats_job_board_link(link: str) -> bool:
+        """Allow only known ATS job-board URL shapes, not generic marketing/store pages."""
+        try:
+            parsed = urlparse(link)
+            host = (parsed.netloc or "").lower()
+            path = (parsed.path or "").lower()
+        except Exception:
+            return False
+
+        if "greenhouse.io" in host:
+            return (
+                host.startswith("boards.greenhouse.io")
+                or host.startswith("job-boards.greenhouse.io")
+                or "/boards/" in path
+            )
+        if "lever.co" in host:
+            return host.startswith("jobs.lever.co") or "/postings/" in path
+        if "ashbyhq.com" in host:
+            return host.startswith("jobs.ashbyhq.com")
+        if "workable.com" in host:
+            return host.startswith("apply.workable.com") or "/jobs/" in path
+        return False

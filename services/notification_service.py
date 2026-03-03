@@ -86,22 +86,40 @@ class NotificationService:
             )
             
             
+            return self.send_custom_notification(subject=subject, html_body=html_body)
+                
+        except Exception as e:
+            logger.error(f"[Notification] Failed to send email: {type(e).__name__}: {e}", exc_info=True)
+            return False
+
+    def send_custom_notification(
+        self,
+        subject: str,
+        html_body: str,
+        sender_email: Optional[str] = None,
+        recipients_override: Optional[List[str]] = None,
+    ) -> bool:
+        """
+        Send a custom HTML notification email using the existing SalesTechBE mail path.
+        """
+        try:
             # 1. Use SalesTechBE's /gamil/send_mail/ endpoint
             sales_api_url = "https://salesapi.gravityer.com/api/v1/gamil/send_mail/"
-            sender_email = "shilpi.bhatia@gravityer.com"
-            recipient_string = ", ".join(self.recipients)
-            
+            sender = sender_email or "shilpi.bhatia@gravityer.com"
+            recipients = recipients_override if recipients_override else self.recipients
+            recipient_string = ", ".join(recipients)
+
             payload = {
-                "from": sender_email,
+                "from": sender,
                 "to": recipient_string,
                 "subject": subject,
                 "body": html_body
             }
-            
-            logger.info(f"[Notification] Sending email via SalesTechBE to {', '.join(self.recipients)}...")
-            
+
+            logger.info(f"[Notification] Sending custom email via SalesTechBE to {', '.join(recipients)}...")
+
             import requests as sync_requests
-            
+
             # Authenticate to get a JWT token
             from config import settings
             token = None
@@ -117,24 +135,27 @@ class NotificationService:
                     logger.error(f"[Notification] Failed to get JWT token: {auth_resp.status_code}")
             except Exception as e:
                 logger.error(f"[Notification] Error getting token: {e}")
-                
+
             headers = {"Content-Type": "application/json"}
             if token:
                 headers["Authorization"] = f"Bearer {token}"
             else:
                 logger.warning("[Notification] Sending email without authentication headers, it may fail with 401")
-            
+
             response = sync_requests.post(sales_api_url, json=payload, headers=headers, timeout=30)
-            
+
             if response.status_code in (200, 201, 202):
-                logger.info(f"[Notification] Email sent via SalesTechBE! Status: {response.status_code}")
+                logger.info(f"[Notification] Custom email sent via SalesTechBE! Status: {response.status_code}")
                 return True
-            else:
-                logger.error(f"[Notification] SalesTechBE failed to send email. Status: {response.status_code}, Response: {response.text}")
-                return False
-                
+
+            logger.error(
+                f"[Notification] SalesTechBE failed to send custom email. "
+                f"Status: {response.status_code}, Response: {response.text}"
+            )
+            return False
+
         except Exception as e:
-            logger.error(f"[Notification] Failed to send email: {type(e).__name__}: {e}", exc_info=True)
+            logger.error(f"[Notification] Failed to send custom notification: {type(e).__name__}: {e}", exc_info=True)
             return False
     
     def _build_html_email(

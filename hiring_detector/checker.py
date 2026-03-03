@@ -30,9 +30,13 @@ class EnhancedHiringChecker:
         result = checker.check_hiring("Acme Corp", "https://acme.com")
     """
     
-    def __init__(self, mistral_api_key: str = None):
-        self.mistral_key = mistral_api_key or os.getenv('MISTRAL_API_KEY')
-        self.analyzer = JobAnalyzer(self.mistral_key) if self.mistral_key else None
+    def __init__(self, mistral_api_key: str = None, disable_mistral: bool = False):
+        if disable_mistral:
+            self.mistral_key = None
+            self.analyzer = None
+        else:
+            self.mistral_key = mistral_api_key or os.getenv('MISTRAL_API_KEY')
+            self.analyzer = JobAnalyzer(self.mistral_key) if self.mistral_key else None
         
     def check_hiring(self, company_name: str, website: str) -> Dict:
         """

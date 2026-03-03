@@ -51,9 +51,9 @@ notification_service = None
 
 # Default list of recipients to receive daily emails
 default_recipients = [
-    "mounica@gravityer.com",
-    "abhinaw@gravityer.com",
-    "pr@gravityer.com",
+    # "mounica@gravityer.com",
+    # "abhinaw@gravityer.com",
+    # "pr@gravityer.com",
     "raeessg22@gmail.com"
 ]
 

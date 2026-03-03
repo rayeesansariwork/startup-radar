@@ -33,11 +33,16 @@ class GlobalRateLimiter:
         self._initialized = True
         # Use Mistral rate limit setting (defaults to 60 RPM if not set)
         self.rpm = getattr(settings, 'mistral_rate_limit_rpm', 60)
-        self.interval = 60.0 / self.rpm
+        configured_interval = 60.0 / self.rpm if self.rpm > 0 else 1.0
+        self.min_interval = float(getattr(settings, 'mistral_min_interval_seconds', 0.0) or 0.0)
+        self.interval = max(configured_interval, self.min_interval)
         self.last_request_time = 0
         self.lock = threading.Lock()
         
-        logger.info(f"⚡ Global Rate Limiter initialized: {self.rpm} RPM ({self.interval:.2f}s interval)")
+        logger.info(
+            f"⚡ Global Rate Limiter initialized: {self.rpm} RPM "
+            f"(effective interval {self.interval:.2f}s)"
+        )
 
     def acquire(self):
         """

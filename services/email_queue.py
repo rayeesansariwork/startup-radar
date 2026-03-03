@@ -110,26 +110,35 @@ class EmailQueueService:
                 body = payload.get("body")
                 result_id = payload.get("result_id", "N/A")
                 already_emailed = payload.get("already_emailed", False)
+                override_to = (settings.outreach_email_override_to or "").strip()
+                effective_to = override_to or to_addr
+                effective_name = "Raees (Override)" if override_to else to_name
                 
-                logger.info(f"📧 Processing queued email for {to_name} <{to_addr}> (Result ID: {result_id})...")
+                if override_to:
+                    logger.info(
+                        f"📧 Processing queued email for {to_name} <{to_addr}> "
+                        f"(Result ID: {result_id}) [OVERRIDE -> {effective_to}]..."
+                    )
+                else:
+                    logger.info(f"📧 Processing queued email for {to_name} <{to_addr}> (Result ID: {result_id})...")
                 
                 # Development / Testing phase logic
                 if not self.send_real_emails:
                     print("\n" + "="*60)
                     print(f"  [DEV MODE] Simulated Email Dispatch")
                     print("="*60)
-                    print(f"  To             : {to_name} <{to_addr}>")
+                    print(f"  To             : {effective_name} <{effective_to}>")
                     print(f"  Subject        : {subject}")
                     print(f"  SalesTechBE ID : {result_id}")
                     print(f"  Already Sent?  : {already_emailed}")
                     print("-"*60)
                     print(body)
                     print("="*60 + "\n")
-                    logger.info(f"✅ [DEV MODE] Simulated send to {to_addr}")
+                    logger.info(f"✅ [DEV MODE] Simulated send to {effective_to}")
                 else:
                     # In actual production, hit the core SalesTechBE endpoint
                     try:
-                        logger.info(f"🚀 [PRODUCTION] Executing real HTTP POST to SalesTechBE for {to_addr}... ")
+                        logger.info(f"🚀 [PRODUCTION] Executing real HTTP POST to SalesTechBE for {effective_to}... ")
                         
                         if not settings.shilpi_crm_email or not settings.shilpi_crm_password:
                             logger.error("❌ CRITICAL: Shilpi CRM Auth is missing from config. Cannot send real email.")
@@ -150,14 +159,14 @@ class EmailQueueService:
                                 # 2. Send the outbound email
                                 endpoint = f"{settings.crm_base_url}/gamil/send_mail/"
                                 mail_payload = {
-                                    "to": to_addr,
+                                    "to": effective_to,
                                     "subject": subject,
                                     "body": body_to_html(body)   # convert to proper HTML
                                 }
                                 
                                 req = requests.post(endpoint, headers=headers, json=mail_payload, timeout=20)
                                 if req.status_code == 200:
-                                    logger.info(f"✅ Success: Real email dispatched via Shilpi Bhatia to {to_addr}")
+                                    logger.info(f"✅ Success: Real email dispatched via Shilpi Bhatia to {effective_to}")
                                     
                                     # 3. Mark Record as Sent
                                     if result_id != "N/A":
@@ -169,11 +178,11 @@ class EmailQueueService:
                                         if mark_req.status_code == 200:
                                             logger.info(f"✅ Marked Outreach Result ID {result_id} as email_sent in SalesTechBE")
                                 else:
-                                    logger.error(f"❌ Failed to dispatch real email to {to_addr}: {req.status_code} - {req.text}")
+                                    logger.error(f"❌ Failed to dispatch real email to {effective_to}: {req.status_code} - {req.text}")
                             else:
                                 logger.error(f"❌ JobProspectorBE could not authenticate as Shilpi Bhatia: {auth_resp.text}")
                     except Exception as e:
-                        logger.error(f"❌ HTTP Exception sending real email to {to_addr}: {e}")
+                        logger.error(f"❌ HTTP Exception sending real email to {effective_to}: {e}")
                 
                 self.queue.task_done()
                 

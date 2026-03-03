@@ -5,7 +5,10 @@ Enhanced Mistral AI analyzer for extracting job information
 import logging
 import json
 import re
+import time
 from typing import List, Dict, Optional
+
+from utils.rate_limiter import rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,23 @@ def _parse_json_response(text: str) -> dict:
     # Strip ```json ... ``` or ``` ... ```
     text = re.sub(r"```(?:json)?\s*", "", text)
     text = text.replace("```", "").strip()
+
+    # Fast path
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Try extracting first top-level object from wrapped/messy responses.
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        candidate = text[start : end + 1]
+        candidate = candidate.replace("\u201c", '"').replace("\u201d", '"')
+        candidate = candidate.replace("\u2018", "'").replace("\u2019", "'")
+        candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+        return json.loads(candidate)
+
     return json.loads(text)
 
 
@@ -74,6 +94,60 @@ class JobAnalyzer:
         if not MISTRAL_AVAILABLE:
             raise ImportError("Mistral package not installed")
         self.mistral = Mistral(api_key=mistral_api_key)
+        self._rate_limited_until = 0.0
+
+    @staticmethod
+    def _is_rate_limit_error(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return "429" in msg or "rate limit" in msg or "rate_limited" in msg
+
+    def _chat_complete_with_retry(
+        self,
+        *,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        max_attempts: int = 3,
+        initial_backoff_seconds: float = 12.0,
+    ):
+        """
+        Centralized Mistral call wrapper with global pacing + 429 backoff.
+        """
+        now = time.time()
+        if now < self._rate_limited_until:
+            remaining = int(self._rate_limited_until - now)
+            raise RuntimeError(f"Mistral cooldown active ({remaining}s remaining)")
+
+        last_error: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # Global thread-safe limiter shared across the process.
+                rate_limiter.acquire()
+                return self.mistral.chat.complete(
+                    model="mistral-large-latest",
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            except Exception as exc:
+                last_error = exc
+                if self._is_rate_limit_error(exc) and attempt < max_attempts:
+                    sleep_s = min(initial_backoff_seconds * (2 ** (attempt - 1)), 120.0)
+                    logger.warning(
+                        "Mistral 429/rate limit (attempt %d/%d). Backing off %.1fs",
+                        attempt,
+                        max_attempts,
+                        sleep_s,
+                    )
+                    time.sleep(sleep_s)
+                    continue
+                if self._is_rate_limit_error(exc):
+                    self._rate_limited_until = time.time() + 300
+                    logger.warning("Mistral entering 300s cooldown after repeated 429")
+                raise
+        if last_error:
+            raise last_error
+        raise RuntimeError("Unknown Mistral call failure")
 
     def analyze_career_page(self, text: str, company_name: str) -> Dict:
         """
@@ -113,11 +187,10 @@ Rules:
 - Include up to 20 job titles maximum
 """
 
-            response = self.mistral.chat.complete(
-                model="mistral-large-latest",
+            response = self._chat_complete_with_retry(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=1000
+                max_tokens=1000,
             )
 
             result_text = response.choices[0].message.content.strip()
@@ -180,11 +253,10 @@ Return ONLY a JSON array of cleaned job titles:
 ["Job Title 1", "Job Title 2", ...]
 """
 
-            response = self.mistral.chat.complete(
-                model="mistral-large-latest",
+            response = self._chat_complete_with_retry(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=500
+                max_tokens=500,
             )
 
             result_text = response.choices[0].message.content.strip()
@@ -284,11 +356,13 @@ Return ONLY valid JSON, no markdown fences:
 
         for attempt in range(max_retries + 1):
             try:
-                response = self.mistral.chat.complete(
-                    model="mistral-large-latest",
+                response = self._chat_complete_with_retry(
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.65,
-                    max_tokens=600
+                    max_tokens=600,
+                    # Fail fast on rate-limited keys; template fallback in caller handles continuity.
+                    max_attempts=1,
+                    initial_backoff_seconds=6.0,
                 )
 
                 result_text = response.choices[0].message.content.strip()

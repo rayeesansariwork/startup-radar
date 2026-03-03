@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import random
+import time
 import requests as sync_requests
 from datetime import datetime, timedelta
 from typing import AsyncGenerator, Optional
@@ -32,6 +33,11 @@ from hiring_detector.checker import EnhancedHiringChecker
 from hiring_detector.analyzer import JobAnalyzer
 from services.apollo_service import ApolloService
 from services.email_queue import email_queue
+from services.talent_job_sync import (
+    TalentAPIClient,
+    ExternalJobPayloadBuilder,
+    build_job_fingerprint,
+)
 
 logger = logging.getLogger("daily_outreach")
 router = APIRouter(prefix="/api/v1", tags=["daily-outreach"])
@@ -83,7 +89,12 @@ def obtain_token() -> Optional[str]:
 
 # ─── Paginated fetch ────────────────────────────────────────────────────────
 
-def fetch_companies(token: str, target_date: str, page_size: int) -> list[dict]:
+def fetch_companies(
+    token: str,
+    target_date: str,
+    page_size: int,
+    max_companies: Optional[int] = None,
+) -> list[dict]:
     """
     Fetch all companies for *target_date* with source=ENRICHMENT ENGINE.
     Correctly resolves relative `next` URLs against CRM_BASE_URL.
@@ -146,6 +157,14 @@ def fetch_companies(token: str, target_date: str, page_size: int) -> list[dict]:
                             page, len(results), len(all_companies), "yes" if url else "no")
             else:
                 logger.warning("⚠️ Unexpected response type on page %d", page)
+                break
+
+            # Respect requested max count for this run.
+            if max_companies and len(all_companies) >= max_companies:
+                all_companies = all_companies[:max_companies]
+                logger.info(
+                    "🧱 Reached max_companies=%d; stopping pagination", max_companies
+                )
                 break
 
             page += 1
@@ -402,9 +421,71 @@ def fetch_processed_companies(token: str) -> set[str]:
     return set()
 
 
+def _build_talent_jobs_notification_html(
+    run_date: str,
+    posted_jobs: list[dict],
+    posted_count: int,
+    failed_count: int,
+    skipped_count: int,
+) -> str:
+    rows = ""
+    for item in posted_jobs[:50]:
+        rows += (
+            "<tr>"
+            f"<td>{item.get('company_name', 'N/A')}</td>"
+            f"<td>{item.get('title', 'N/A')}</td>"
+            f"<td>{item.get('role', 'N/A')}</td>"
+            f"<td>{item.get('job_id', 'N/A')}</td>"
+            f"<td>{item.get('slug', 'N/A')}</td>"
+            "</tr>"
+        )
+
+    return f"""
+    <html>
+    <head>
+      <style>
+        body {{ font-family: Arial, sans-serif; color: #222; }}
+        .box {{ background: #f7f7f7; padding: 12px; border-radius: 6px; }}
+        table {{ border-collapse: collapse; width: 100%; margin-top: 12px; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 13px; }}
+        th {{ background: #efefef; }}
+      </style>
+    </head>
+    <body>
+      <h2>Talent API Job Sync Report</h2>
+      <div class="box">
+        <div><strong>Run date:</strong> {run_date}</div>
+        <div><strong>Jobs posted:</strong> {posted_count}</div>
+        <div><strong>Jobs failed:</strong> {failed_count}</div>
+        <div><strong>Jobs skipped:</strong> {skipped_count}</div>
+      </div>
+      <h3>Created Jobs (up to 50)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Company</th>
+            <th>Title</th>
+            <th>Role</th>
+            <th>Job ID</th>
+            <th>Slug</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows or '<tr><td colspan="5">No jobs created</td></tr>'}
+        </tbody>
+      </table>
+    </body>
+    </html>
+    """
+
+
 # ─── SSE stream generator ───────────────────────────────────────────────────
 
-async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]:
+async def _stream(
+    target_date: str,
+    page_size: int,
+    force_process: bool = False,
+) -> AsyncGenerator[str, None]:
     """Core generator — yields SSE events."""
 
     loop = asyncio.get_event_loop()
@@ -422,7 +503,14 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
 
     # 2) Fetch companies
     yield _sse("log", {"message": f"📅 Fetching companies (date={target_date}, page_size={page_size}) …"})
-    companies = await loop.run_in_executor(None, fetch_companies, token, target_date, page_size)
+    companies = await loop.run_in_executor(
+        None,
+        fetch_companies,
+        token,
+        target_date,
+        page_size,
+        page_size,  # hard cap so page_size behaves like total items requested
+    )
     yield _sse("log", {"message": f"📦 {len(companies)} companies fetched"})
 
     if not companies:
@@ -432,21 +520,85 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
             "hiring_calls_made": 0,
             "hiring_detected": 0,
             "mails_generated": 0,
+            "external_jobs_prepared": 0,
+            "external_jobs_posted": 0,
+            "external_jobs_failed": 0,
+            "external_jobs_skipped": 0,
             "errors": 0,
             "processed_companies": [],
         })
         return
 
-    # 3) Hiring checker + AI email writer
-    hiring_checker = EnhancedHiringChecker(mistral_api_key=settings.mistral_api_key)
-    job_analyzer = JobAnalyzer(mistral_api_key=settings.mistral_api_key)
-    apollo_service = ApolloService(api_key=settings.apollo_api_key)
-    
-    yield _sse("log", {"message": "🤖 Mistral AI ready (will generate tailored emails for hiring companies)"})
-    yield _sse("log", {"message": "🔍 Apollo Service initialized for real contact discovery"})
+    # 3) Hiring checker + optional outreach email workflow
+    email_workflow_enabled = bool(settings.daily_outreach_email_enabled)
+    hiring_checker = EnhancedHiringChecker(
+        mistral_api_key=settings.mistral_api_key,
+        disable_mistral=not email_workflow_enabled,
+    )
+    job_analyzer = None
+    apollo_service = None
+    if email_workflow_enabled:
+        outreach_mistral_key = settings.mistral_api_key_for_outreach or settings.mistral_api_key
+        job_analyzer = JobAnalyzer(mistral_api_key=outreach_mistral_key)
+        apollo_service = ApolloService(api_key=settings.apollo_api_key)
 
-    # 4) Fetch deduplication list
-    processed_companies_set = await loop.run_in_executor(None, fetch_processed_companies, token)
+    talent_sync_enabled = (
+        settings.talent_api_enabled
+        and bool(settings.talent_api_base_url)
+        and bool(settings.talent_api_email)
+        and bool(settings.talent_api_password)
+    )
+    talent_rate_limit_seconds = max(1, settings.talent_api_rate_limit_seconds)
+    talent_max_jobs_per_company = max(1, settings.talent_api_max_jobs_per_company)
+    talent_api_client = None
+    payload_builder = None
+    if talent_sync_enabled:
+        talent_api_client = TalentAPIClient(
+            base_url=settings.talent_api_base_url,
+            email=settings.talent_api_email or "",
+            password=settings.talent_api_password or "",
+            request_max_retries=max(1, settings.talent_api_request_max_retries),
+            request_backoff_seconds=max(0.25, settings.talent_api_request_backoff_seconds),
+            debug=settings.talent_api_debug,
+        )
+        talent_payload_mistral_key = (
+            settings.mistral_api_key_for_talent or settings.mistral_api_key
+        )
+        payload_builder = ExternalJobPayloadBuilder(
+            mistral_api_key=talent_payload_mistral_key,
+            default_role_id=settings.talent_api_default_role_id,
+        )
+
+    if email_workflow_enabled:
+        yield _sse("log", {"message": "🤖 Mistral AI ready (will generate tailored emails for hiring companies)"})
+        yield _sse("log", {"message": "🔍 Apollo Service initialized for real contact discovery"})
+    else:
+        yield _sse("log", {"message": "✉️ Outreach email workflow disabled (Talent-only mode)"})
+    if talent_sync_enabled:
+        yield _sse(
+            "log",
+            {
+                "message": (
+                    f"📤 Talent API sync enabled (rate limit: 1 job every {talent_rate_limit_seconds}s, "
+                    f"max jobs/company: {talent_max_jobs_per_company})"
+                )
+            },
+        )
+        if settings.talent_api_debug:
+            yield _sse("log", {"message": "🪵 Talent API debug logging enabled"})
+    else:
+        yield _sse("log", {"message": "📤 Talent API sync disabled"})
+
+    # 4) Fetch deduplication list (email workflow only)
+    if email_workflow_enabled:
+        processed_companies_set = await loop.run_in_executor(None, fetch_processed_companies, token)
+    else:
+        processed_companies_set = set()
+
+    if force_process:
+        processed_companies_set = set()
+        logger.info("Force-process mode enabled: deduplication bypassed for this run")
+        yield _sse("log", {"message": "🧪 Force-process mode enabled: deduplication bypassed for this run"})
     if processed_companies_set:
         yield _sse("log", {"message": f"🛡️  Deduplication: Found {len(processed_companies_set)} previously processed companies with contacts."})
 
@@ -454,7 +606,13 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
     hiring_calls = 0
     hiring_detected = 0
     mails_generated = 0
+    external_jobs_prepared = 0
+    external_jobs_posted = 0
+    external_jobs_failed = 0
+    external_jobs_skipped = 0
     errors = 0
+    pending_external_jobs: list[dict] = []
+    talent_jobs_created: list[dict] = []
 
     for idx, company in enumerate(companies, 1):
         name = company.get("company_name", "Unknown")
@@ -462,6 +620,7 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
         
         # ── Deduplication Check ──
         if name in processed_companies_set:
+            logger.info("Skipping %s due to dedup (already processed)", name)
             yield _sse("log", {"message": f"[{idx}/{len(companies)}] ⏭️ Skipping {name} — C-suite contacts already processed."})
             continue
             
@@ -474,9 +633,16 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
             "is_hiring": False,
             "job_count": 0,
             "job_roles": [],
+            "career_page_url": None,
+            "hiring_summary": None,
+            "detection_method": None,
             "custom_mail": None,
             "found_contacts": [],
             "personalized_email": None,
+            "external_jobs_prepared": 0,
+            "external_jobs_posted": 0,
+            "external_jobs_failed": 0,
+            "external_jobs_skipped": 0,
             "error": None,
         }
 
@@ -495,15 +661,78 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
             result_entry["is_hiring"] = is_hiring
             result_entry["job_count"] = hiring_result.get("job_count", len(job_roles))
             result_entry["job_roles"] = job_roles
+            result_entry["career_page_url"] = hiring_result.get("career_page_url")
+            result_entry["hiring_summary"] = hiring_result.get("hiring_summary")
+            result_entry["detection_method"] = hiring_result.get("detection_method")
 
             if is_hiring:
                 hiring_detected += 1
+
+            # Optional external-job payload generation for Talent API sync
+            if (
+                talent_sync_enabled
+                and payload_builder
+                and is_hiring
+                and result_entry["job_roles"]
+            ):
+                try:
+                    payloads = await loop.run_in_executor(
+                        None,
+                        payload_builder.build_payloads,
+                        name,
+                        website,
+                        result_entry.get("career_page_url"),
+                        result_entry["job_roles"],
+                        talent_max_jobs_per_company,
+                    )
+                    if payloads:
+                        result_entry["external_jobs_prepared"] = len(payloads)
+                        external_jobs_prepared += len(payloads)
+                        pending_external_jobs.extend(
+                            {
+                                "company_name": name,
+                                "payload": payload,
+                                "result_entry": result_entry,
+                            }
+                            for payload in payloads
+                        )
+                        yield _sse(
+                            "log",
+                            {
+                                "message": (
+                                    f"   📦 Prepared {len(payloads)} external job payload(s) for {name}"
+                                )
+                            },
+                        )
+                    else:
+                        yield _sse(
+                            "log",
+                            {"message": f"   ⚠️ Could not build external job payloads for {name}"},
+                        )
+                except Exception as ext_payload_exc:
+                    logger.error(
+                        "External payload generation failed for %s: %s",
+                        name,
+                        ext_payload_exc,
+                    )
 
         except Exception as exc:
             hiring_calls += 1
             errors += 1
             result_entry["error"] = str(exc)
             logger.error("Hiring check failed for %s: %s", name, exc)
+
+        # Talent-only mode: skip outreach email and Apollo contact workflow.
+        if not email_workflow_enabled:
+            result_entry["mail_source"] = "disabled"
+            processed.append(result_entry)
+            yield _sse("company", result_entry)
+            if idx < len(companies):
+                delay = random.uniform(_DELAY_MIN, _DELAY_MAX)
+                logger.debug("Politeness delay: %.1f s before next company", delay)
+                yield _sse("log", {"message": f"   Waiting {delay:.1f}s before next request ..."})
+                await asyncio.sleep(delay)
+            continue
 
         # ── Generate mail ──
         #   • Hiring companies → Mistral AI (tailored, role-aware)
@@ -636,13 +865,162 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
             yield _sse("log", {"message": f"   ⏸ Waiting {delay:.1f}s before next request …"})
             await asyncio.sleep(delay)
 
-    # 4) Final summary
+    # 4) Optional Talent API external-job publish (rate-limited)
+    if talent_sync_enabled and talent_api_client and pending_external_jobs:
+        yield _sse(
+            "log",
+            {"message": f"📤 Publishing {len(pending_external_jobs)} external jobs to Talent API..."},
+        )
+        seen_fingerprints: set[str] = set()
+        last_sent_monotonic: Optional[float] = None
+
+        for publish_idx, item in enumerate(pending_external_jobs, 1):
+            company_name = item["company_name"]
+            payload = item["payload"]
+            company_entry = item["result_entry"]
+
+            fingerprint = build_job_fingerprint(company_name, payload)
+            if fingerprint in seen_fingerprints:
+                external_jobs_skipped += 1
+                company_entry["external_jobs_skipped"] += 1
+                continue
+            seen_fingerprints.add(fingerprint)
+
+            if last_sent_monotonic is not None:
+                elapsed = time.monotonic() - last_sent_monotonic
+                wait_seconds = max(0.0, talent_rate_limit_seconds - elapsed)
+                if wait_seconds > 0:
+                    yield _sse(
+                        "log",
+                        {"message": f"   ⏸ Waiting {wait_seconds:.1f}s before next Talent API job post..."},
+                    )
+                    await asyncio.sleep(wait_seconds)
+
+            yield _sse(
+                "log",
+                {
+                    "message": (
+                        f"   📨 [{publish_idx}/{len(pending_external_jobs)}] "
+                        f"Posting external job: {company_name} - {payload.get('title', 'Untitled')}"
+                    )
+                },
+            )
+            taxonomy_result = await loop.run_in_executor(
+                None,
+                talent_api_client.ensure_payload_taxonomy_with_audit,
+                payload,
+            )
+            if isinstance(taxonomy_result, dict):
+                payload = taxonomy_result.get("payload") or payload
+                audit = taxonomy_result.get("audit") or {}
+            else:
+                audit = {}
+
+            role_resolved = audit.get("role_resolved")
+            if isinstance(role_resolved, dict):
+                yield _sse(
+                    "log",
+                    {
+                        "message": (
+                            "   🧩 Talent role resolved/created: "
+                            f"{role_resolved.get('input')} -> {role_resolved.get('id')}"
+                        )
+                    },
+                )
+
+            skills_resolved = audit.get("skills_resolved") or []
+            if skills_resolved:
+                preview = ", ".join(skills_resolved[:5])
+                if len(skills_resolved) > 5:
+                    preview += ", ..."
+                yield _sse(
+                    "log",
+                    {
+                        "message": (
+                            "   🧩 Talent skills resolved/created: "
+                            f"{preview}"
+                        )
+                    },
+                )
+            post_result = await loop.run_in_executor(
+                None,
+                talent_api_client.post_external_job,
+                payload,
+            )
+            last_sent_monotonic = time.monotonic()
+
+            if post_result.get("success"):
+                external_jobs_posted += 1
+                company_entry["external_jobs_posted"] += 1
+                created_data = post_result.get("data") or {}
+                created_job_id = created_data.get("_id") or created_data.get("id")
+                created_slug = created_data.get("slug")
+                talent_jobs_created.append(
+                    {
+                        "company_name": company_name,
+                        "title": payload.get("title"),
+                        "job_id": created_job_id,
+                        "slug": created_slug,
+                        "role": (created_data.get("role") or {}).get("name")
+                        if isinstance(created_data.get("role"), dict)
+                        else created_data.get("role"),
+                    }
+                )
+                yield _sse(
+                    "log",
+                    {
+                        "message": (
+                            "   ✅ Talent API job created"
+                            f" (id={created_job_id or 'n/a'}, slug={created_slug or 'n/a'})"
+                        )
+                    },
+                )
+            else:
+                err = post_result.get("error") or "Unknown error"
+                is_duplicate_title = bool(post_result.get("is_duplicate_title"))
+                if is_duplicate_title:
+                    external_jobs_skipped += 1
+                    company_entry["external_jobs_skipped"] += 1
+                    yield _sse(
+                        "log",
+                        {
+                            "message": (
+                                "   ↩️ Talent API skipped duplicate title: "
+                                f"{payload.get('title', 'Untitled')}"
+                            )
+                        },
+                    )
+                    logger.info(
+                        "Talent API duplicate title skipped for %s (%s): %s",
+                        company_name,
+                        payload.get("title"),
+                        err,
+                    )
+                    continue
+
+                external_jobs_failed += 1
+                company_entry["external_jobs_failed"] += 1
+                logger.error(
+                    "Talent API external job post failed for %s (%s): %s",
+                    company_name,
+                    payload.get("title"),
+                    err,
+                )
+                yield _sse("log", {"message": f"   ⚠️ Talent API post failed: {str(err)[:200]}"})
+    elif talent_sync_enabled and not pending_external_jobs:
+        yield _sse("log", {"message": "📤 Talent API sync enabled, but no external jobs were prepared"})
+
+    # 5) Final summary
     summary = {
         "date": target_date,
         "companies_fetched": len(companies),
         "hiring_calls_made": hiring_calls,
         "hiring_detected": hiring_detected,
         "mails_generated": mails_generated,
+        "external_jobs_prepared": external_jobs_prepared,
+        "external_jobs_posted": external_jobs_posted,
+        "external_jobs_failed": external_jobs_failed,
+        "external_jobs_skipped": external_jobs_skipped,
         "errors": errors,
         "processed_companies": processed,
     }
@@ -650,7 +1028,8 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
     yield _sse("log", {
         "message": (
             f"✅ Done — {len(companies)} fetched, {hiring_detected} hiring, "
-            f"{mails_generated} mails, {errors} errors"
+            f"{mails_generated} mails, {external_jobs_posted} posted, "
+            f"{external_jobs_failed} failed, {external_jobs_skipped} skipped, {errors} errors"
         )
     })
     yield _sse("summary", summary)
@@ -662,10 +1041,21 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         } if token else {}
+
+        # Keep external-sync metrics in SSE output, but do not send unknown keys
+        # to SalesTechBE bulk_create payload.
+        persist_ready_results = []
+        for entry in processed:
+            row = dict(entry)
+            row.pop("external_jobs_prepared", None)
+            row.pop("external_jobs_posted", None)
+            row.pop("external_jobs_failed", None)
+            row.pop("external_jobs_skipped", None)
+            persist_ready_results.append(row)
         
         persist_resp = sync_requests.post(
             f"{CRM_BASE_URL}/hiring-outreach-results/bulk_create/",
-            json={"results": processed, "run_date": target_date},
+            json={"results": persist_ready_results, "run_date": target_date},
             headers=persist_headers,
             timeout=REQUEST_TIMEOUT,
         )
@@ -674,9 +1064,18 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
             saved = data.get("created", 0)
             returned_results = data.get("results", [])
             yield _sse("log", {"message": f"✅ {saved} results saved to database"})
+            if not email_workflow_enabled:
+                returned_results = []
+                yield _sse("log", {"message": "Outreach email workflow disabled: skipping queued dispatch"})
             
             # ── Enqueue emails now that we have SalesTechBE IDs ──
             queued_count = 0
+            outreach_override_to = (settings.outreach_email_override_to or "").strip()
+            if outreach_override_to:
+                yield _sse(
+                    "log",
+                    {"message": f"Outreach recipient override active: {outreach_override_to}"},
+                )
             for r in returned_results:
                 personalized_data = r.get("personalized_email")
                 if personalized_data and r.get("id"):
@@ -687,13 +1086,19 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
                     # Only enqueue if it hasn't somehow already been marked as sent
                     if not already_emailed:
                         for personalized in emails_to_send:
+                            target_to = outreach_override_to or personalized["to"]
+                            target_name = (
+                                "Raees (Override)"
+                                if outreach_override_to
+                                else personalized["to_name"]
+                            )
                             payload = {
                                 "result_id": r["id"],
-                                "to": personalized["to"],
-                                "to_name": personalized["to_name"],
+                                "to": target_to,
+                                "to_name": target_name,
                                 "subject": personalized["subject"],
                                 "body": personalized["body"],
-                                "already_emailed": False 
+                                "already_emailed": False
                             }
                             
                             try:
@@ -719,6 +1124,10 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
         logger.error("Failed to persist outreach results: %s", exc)
         yield _sse("log", {"message": f"⚠️ Could not save results: {exc}"})
         
+    if not email_workflow_enabled:
+        yield _sse("log", {"message": "Outreach email workflow disabled: skipping summary notifications"})
+        return
+
     # ── Send Email Notification ─────────────────────────────────────────
     try:
         from services import NotificationService
@@ -726,11 +1135,11 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
         yield _sse("log", {"message": "📧 Sending summary email notification via SalesTechBE …"})
         
         default_recipients = [
-            "mounica@gravityer.com",
-            "abhinaw@gravityer.com",
-            "pr@gravityer.com",
-            "raeessg22@gmail.com",
-            "arindam@gravityer.com",
+            # "mounica@gravityer.com",
+            # "abhinaw@gravityer.com",
+            # "pr@gravityer.com",
+            "raeessg22@gmail.com"
+            # "arindam@gravityer.com",
         ]
         recipients = list(default_recipients)
         if settings.notification_recipient and settings.notification_recipient not in recipients:
@@ -739,6 +1148,37 @@ async def _stream(target_date: str, page_size: int) -> AsyncGenerator[str, None]
         notification_service = NotificationService(
             recipients=recipients
         )
+
+        # Dedicated alert when new Talent API jobs were created
+        if talent_jobs_created:
+            talent_subject = (
+                f"Talent API Job Sync - {external_jobs_posted} New External Job(s) "
+                f"({target_date})"
+            )
+            talent_html = _build_talent_jobs_notification_html(
+                run_date=target_date,
+                posted_jobs=talent_jobs_created,
+                posted_count=external_jobs_posted,
+                failed_count=external_jobs_failed,
+                skipped_count=external_jobs_skipped,
+            )
+            talent_sent = notification_service.send_custom_notification(
+                subject=talent_subject,
+                html_body=talent_html,
+                sender_email="rayees@gravityer.com",
+                recipients_override=["raeessg22@gmail.com"],
+            )
+            if talent_sent:
+                yield _sse(
+                    "log",
+                    {
+                        "message": (
+                            f"✅ Talent job-sync email sent ({external_jobs_posted} posted jobs)"
+                        )
+                    },
+                )
+            else:
+                yield _sse("log", {"message": "⚠️ Talent job-sync email failed"})
         
         # Format the data for the existing NotificationService template
         # Reusing the existing discovery format since we just need the same visual email
@@ -768,7 +1208,11 @@ async def daily_hiring_outreach(
         None,
         description="Override target date (YYYY-MM-DD). Defaults to yesterday.",
     ),
-    page_size: int = Query(100, ge=1, le=500, description="Page size for company fetch"),
+    page_size: int = Query(100, ge=1, le=500, description="Maximum companies to process in this run"),
+    force_process: bool = Query(
+        False,
+        description="If true, bypass dedup and process companies even if previously processed.",
+    ),
 ):
     """
     Stream daily hiring outreach via SSE.
@@ -791,10 +1235,15 @@ async def daily_hiring_outreach(
                 media_type="text/event-stream",
             )
 
-    logger.info("🚀 /daily-hiring-outreach/ called  date=%s  page_size=%d", target_date, page_size)
+    logger.info(
+        "🚀 /daily-hiring-outreach/ called  date=%s  page_size=%d  force_process=%s",
+        target_date,
+        page_size,
+        force_process,
+    )
 
     return StreamingResponse(
-        _stream(target_date, page_size),
+        _stream(target_date, page_size, force_process),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

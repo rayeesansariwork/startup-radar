@@ -82,6 +82,7 @@ class HiringPageFinderService:
         return {
             "career_page_url": career_url,
             "jobs": jobs,
+            "raw_text": content,
             "detection_method": method
         }
 
@@ -319,3 +320,5 @@ Page Text:
             return parsed.netloc.replace('www.', '')
         except Exception:
             return None
+
+
