@@ -105,7 +105,7 @@ class NotificationService:
         try:
             # 1. Use SalesTechBE's /gamil/send_mail/ endpoint
             sales_api_url = "https://salesapi.gravityer.com/api/v1/gamil/send_mail/"
-            sender = sender_email or "shilpi.bhatia@gravityer.com"
+            sender = sender_email or "rayees@gravityer.com"
             recipients = recipients_override if recipients_override else self.recipients
             recipient_string = ", ".join(recipients)
 

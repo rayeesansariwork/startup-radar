@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     send_real_emails: bool = False
     outreach_email_override_to: Optional[str] = None
     daily_outreach_email_enabled: bool = False
+    outreach_sender_email: str = "shilpi.bhatia@gravityer.com"
     shilpi_crm_email: Optional[str] = None
     shilpi_crm_password: Optional[str] = None
     shilpi_crm_access_token: Optional[str] = None

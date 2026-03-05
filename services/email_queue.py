@@ -139,9 +139,18 @@ class EmailQueueService:
                     # In actual production, hit the core SalesTechBE endpoint
                     try:
                         logger.info(f"🚀 [PRODUCTION] Executing real HTTP POST to SalesTechBE for {effective_to}... ")
-                        
+
+                        configured_sender = (settings.shilpi_crm_email or "").strip().lower()
+                        required_sender = (settings.outreach_sender_email or "").strip().lower()
+
                         if not settings.shilpi_crm_email or not settings.shilpi_crm_password:
                             logger.error("❌ CRITICAL: Shilpi CRM Auth is missing from config. Cannot send real email.")
+                        elif required_sender and configured_sender != required_sender:
+                            logger.error(
+                                "❌ CRITICAL: Outreach sender mismatch. "
+                                f"Expected {settings.outreach_sender_email}, got {settings.shilpi_crm_email}. "
+                                "Skipping real email dispatch to preserve sender ownership."
+                            )
                         else:
                             # 1. Always Auth to ensure valid token for long queues
                             auth_resp = requests.post(f"{settings.crm_base_url}/token/obtain/", json={
@@ -166,7 +175,10 @@ class EmailQueueService:
                                 
                                 req = requests.post(endpoint, headers=headers, json=mail_payload, timeout=20)
                                 if req.status_code == 200:
-                                    logger.info(f"✅ Success: Real email dispatched via Shilpi Bhatia to {effective_to}")
+                                    logger.info(
+                                        f"✅ Success: Real email dispatched via {settings.outreach_sender_email} "
+                                        f"to {effective_to}"
+                                    )
                                     
                                     # 3. Mark Record as Sent
                                     if result_id != "N/A":

@@ -70,6 +70,9 @@ _UNSUPPORTED_TITLE_KEYWORDS = (
 )
 _TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 _RETRYABLE_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+_DISALLOWED_SCRIPT_RE = re.compile(
+    r"[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af\u0400-\u04ff\u0590-\u05ff\u0600-\u06ff]"
+)
 
 try:
     from mistralai import Mistral
@@ -323,7 +326,63 @@ class TalentAPIClient:
 
     @staticmethod
     def _role_key(name: str) -> str:
-        return " ".join(str(name or "").strip().lower().split())
+        raw = str(name or "").strip().lower()
+        raw = raw.replace("_", " ").replace("-", " ").replace("/", " ")
+        raw = re.sub(r"[^a-z0-9\s]+", " ", raw)
+        return " ".join(raw.split())
+
+    @staticmethod
+    def _format_role_name(name: str) -> str:
+        """
+        Normalize slug/snake_case role hints into human-readable role names.
+        Example: customer_support_agent -> Customer Support Agent
+        """
+        raw = str(name or "").strip()
+        if not raw:
+            return ""
+
+        if "_" in raw:
+            raw = raw.replace("_", " ")
+        if "-" in raw and " " not in raw and "/" not in raw:
+            raw = raw.replace("-", " ")
+        raw = re.sub(r"\s+", " ", raw).strip()
+
+        acronym_map = {
+            "ai": "AI",
+            "ml": "ML",
+            "qa": "QA",
+            "ui": "UI",
+            "ux": "UX",
+            "hr": "HR",
+            "sde": "SDE",
+            "sre": "SRE",
+            "cto": "CTO",
+            "ceo": "CEO",
+            "coo": "COO",
+            "cfo": "CFO",
+            "vp": "VP",
+            "av": "A/V",
+            "a/v": "A/V",
+            "devops": "DevOps",
+        }
+        lower_words = {"and", "or", "of", "for", "to", "in", "on", "with", "the", "a", "an"}
+
+        tokens = raw.split(" ")
+        formatted_tokens: List[str] = []
+        for token in tokens:
+            low = token.lower()
+            if low in acronym_map:
+                formatted_tokens.append(acronym_map[low])
+            elif low in lower_words and formatted_tokens:
+                formatted_tokens.append(low)
+            elif token.isupper() and len(token) <= 4:
+                formatted_tokens.append(token)
+            elif token.islower() or token.isupper():
+                formatted_tokens.append(token.capitalize())
+            else:
+                formatted_tokens.append(token)
+
+        return " ".join(formatted_tokens)
 
     def _seed_local_role_cache(self) -> None:
         for item in ROLE_CATALOG:
@@ -597,7 +656,8 @@ class TalentAPIClient:
         return "Developer"
 
     def create_job_role(self, role_name: str, department: Optional[str] = None) -> Optional[str]:
-        name = str(role_name or "").strip()
+        original_name = str(role_name or "").strip()
+        name = self._format_role_name(original_name)
         if not name:
             return None
         key = self._role_key(name)
@@ -629,6 +689,8 @@ class TalentAPIClient:
         role_id = self._extract_id(data)
         if role_id:
             self._role_cache[key] = role_id
+            if original_name:
+                self._role_cache[self._role_key(original_name)] = role_id
             logger.info("Created/resolved Talent role '%s' -> %s", name, role_id)
             return role_id
 
@@ -637,16 +699,18 @@ class TalentAPIClient:
             self._load_existing_roles_once(force=True)
             if key in self._role_cache:
                 return self._role_cache[key]
-            found = self._search_role_id_by_name(name)
+            found = self._search_role_id_by_name(name) or self._search_role_id_by_name(original_name)
             if found:
+                self._role_cache[key] = found
                 return found
 
         if response.status_code == 500 and "failed to create data" in body:
             self._load_existing_roles_once(force=True)
             if key in self._role_cache:
                 return self._role_cache[key]
-            found = self._search_role_id_by_name(name)
+            found = self._search_role_id_by_name(name) or self._search_role_id_by_name(original_name)
             if found:
+                self._role_cache[key] = found
                 return found
 
         logger.warning(
@@ -1105,6 +1169,9 @@ Rules:
   "<p><strong>Role Overview:</strong> ...</p><p><strong>Key Responsibilities:</strong></p><ul><li>...</li><li>...</li></ul>"
 - Do NOT mention any company name, website, or brand in description/shortDescription.
 - shortDescription should be concise (about 20-35 words) and generic.
+- Output ONLY English jobs. If a role/title is non-English, omit that item from output.
+- role must be human-readable role name (not slug/snake_case). Example: "Customer Support Agent", not "customer_support_agent".
+- Skills must be semantically aligned with the title; do not assign AI/ML skills to non-AI roles.
 """
         try:
             response = self._chat_complete_with_retry(
@@ -1307,6 +1374,21 @@ Rules:
             fallback=default["department"],
         )
 
+        initial_role_hint = str(merged.get("role", "")).strip()
+        initial_skills = self._as_str_list(merged.get("skills"), default=default["skills"])
+        if self._contains_non_english_job_data(
+            title=merged["title"],
+            role_hint=initial_role_hint,
+            skills=initial_skills,
+        ):
+            logger.info(
+                "Skipping non-English external job: title='%s' role='%s' skills=%s",
+                merged["title"],
+                initial_role_hint,
+                initial_skills,
+            )
+            return None
+
         if self._should_skip_title(merged["title"]):
             logger.info("Skipping unsupported external job title: %s", merged["title"])
             return None
@@ -1319,6 +1401,7 @@ Rules:
                 role_hint=role_value,
                 title=merged["title"],
                 description=str(merged.get("description", "")),
+                threshold=0.72,
             )
             if role_match:
                 merged["role"] = role_match["_id"]
@@ -1365,6 +1448,17 @@ Rules:
                 merged["title"],
                 raw_skills,
             )
+        merged["skills"] = self._align_skills_to_title(
+            title=merged["title"],
+            skills=self._as_str_list(merged.get("skills"), default=default["skills"]),
+        )
+        if self._contains_non_english_job_data(
+            title=merged["title"],
+            role_hint=str(merged.get("role") or ""),
+            skills=merged.get("skills") or [],
+        ):
+            logger.info("Skipping non-English external job after taxonomy: title='%s'", merged["title"])
+            return None
 
         description = str(merged.get("description", default["description"])).strip()
         short_description = str(merged.get("shortDescription", default["shortDescription"])).strip()
@@ -1403,6 +1497,76 @@ Rules:
         if isinstance(value, str) and value.strip():
             return [value.strip()]
         return default
+
+    @staticmethod
+    def _contains_disallowed_script(text: str) -> bool:
+        return bool(_DISALLOWED_SCRIPT_RE.search(str(text or "")))
+
+    def _contains_non_english_job_data(self, title: str, role_hint: str, skills: List[str]) -> bool:
+        if self._contains_disallowed_script(title):
+            return True
+        if self._contains_disallowed_script(role_hint):
+            return True
+        for skill in skills or []:
+            if self._contains_disallowed_script(skill):
+                return True
+        return False
+
+    @staticmethod
+    def _dedupe_preserve_order(items: List[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for item in items:
+            key = " ".join(str(item or "").strip().lower().split())
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(str(item).strip())
+        return out
+
+    def _align_skills_to_title(self, title: str, skills: List[str]) -> List[str]:
+        aligned = self._derive_title_aligned_skills(title)
+        if aligned:
+            normalized_aligned = self._dedupe_preserve_order(aligned)
+            logger.info(
+                "Skill alignment applied for title='%s': %s",
+                title,
+                normalized_aligned,
+            )
+            return normalized_aligned
+        return self._dedupe_preserve_order(skills or ["Communication"])
+
+    @staticmethod
+    def _derive_title_aligned_skills(title: str) -> Optional[List[str]]:
+        t = str(title or "").lower()
+        if not t:
+            return None
+
+        if "a/v" in t or "av technician" in t:
+            return ["A/V Systems", "Troubleshooting", "Technical Support"]
+        if any(k in t for k in ("customer support", "support agent", "helpdesk", "customer success")):
+            return ["Customer Service", "Communication", "Problem-Solving"]
+        if any(k in t for k in ("program manager", "project manager")):
+            return ["Project Management", "Stakeholder Management", "Cross-functional Collaboration"]
+        if any(k in t for k in ("security", "cyber")):
+            return ["Cybersecurity", "Network Security", "Risk Assessment"]
+        if any(k in t for k in ("electrical", "electronics", "electronic engineer")):
+            return ["Electrical Systems", "Troubleshooting", "Technical Documentation"]
+        if "mechanical" in t:
+            return ["Mechanical Design", "Troubleshooting", "Technical Documentation"]
+        if any(k in t for k in ("manufacturing", "quality inspector", "material associate", "assembly technician")):
+            return ["Quality Control", "Safety Protocols", "Troubleshooting"]
+        if any(k in t for k in ("recruiter", "talent acquisition", "human resources", "hr ")):
+            return ["Communication", "Talent Acquisition", "Stakeholder Management"]
+        if any(k in t for k in ("designer", "ui", "ux", "graphic design")):
+            return ["Figma", "Wireframing & Prototyping", "UI/UX Implementation"]
+        if any(k in t for k in ("frontend", "react")):
+            return ["JavaScript", "React.js", "HTML5"]
+        if any(k in t for k in ("devops", "site reliability", "sre", "platform engineer")):
+            return ["DevOps", "AWS Cloud Service", "Docker / Kubernetes"]
+        if any(k in t for k in ("ai ", " ai", "machine learning", "ml ", "data scientist")):
+            return ["Python", "AI Engineers", "Mysql"]
+        return None
 
     @staticmethod
     def _to_iso_utc(dt: datetime) -> str:
