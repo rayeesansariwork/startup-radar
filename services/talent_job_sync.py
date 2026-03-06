@@ -1393,7 +1393,7 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
         # Strip any leftover ObjectId so we never send a hex string as roleName.
         if _OBJECT_ID_RE.match(role_name_raw):
             role_name_raw = merged["title"]
-        merged["roleName"] = self._format_role_name(role_name_raw)
+        merged["roleName"] = TalentAPIClient._format_role_name(role_name_raw)
         merged["categoryName"] = str(
             merged.get("categoryName") or merged.get("department") or "Engineering"
         ).strip()
