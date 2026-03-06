@@ -232,7 +232,7 @@ class TalentAPIClient:
         prepared["country"] = self._normalize_country_text(prepared.get("country")) or "India"
 
         slug_input = str(prepared.get("slug") or "").strip()
-        slug_seed = f"{prepared.get('title') or ''}|{prepared.get('role') or ''}|{prepared.get('department') or ''}"
+        slug_seed = f"{prepared.get('title') or ''}|{prepared.get('roleName') or prepared.get('role') or ''}|{prepared.get('department') or ''}"
         prepared["slug"] = self._build_ascii_slug(slug_input or title, seed=slug_seed)
 
         return prepared
@@ -775,44 +775,32 @@ class TalentAPIClient:
         return result.get("payload", dict(payload or {}))
 
     def ensure_payload_taxonomy_with_audit(self, payload: Dict) -> Dict:
+        """
+        Pass-through taxonomy step.
+
+        Role and skill creation via API is intentionally removed.  We now rely on
+        the backend to create the role from ``roleName`` + ``categoryName`` fields
+        and accept ``skills`` as a plain array of strings — no pre-creation needed.
+        """
         updated = dict(payload or {})
         audit = {
             "role_resolved": None,
             "skills_resolved": [],
         }
         self._log_debug(
-            "Taxonomy input payload summary: title=%s role=%s skills=%s country=%s state=%s city=%s",
+            "Taxonomy input payload summary: title=%s roleName=%s skills=%s country=%s state=%s city=%s",
             updated.get("title"),
-            updated.get("role"),
+            updated.get("roleName"),
             updated.get("skills"),
             updated.get("country"),
             updated.get("state"),
             updated.get("city"),
         )
 
-        # Create/resolve role if payload has unresolved non-ObjectId role.
-        role_value = str(updated.get("role") or "").strip()
-        if role_value and not _OBJECT_ID_RE.match(role_value):
-            created_role_id = self.create_job_role(
-                role_name=role_value,
-                department=str(updated.get("department") or "").strip() or None,
-            )
-            if created_role_id:
-                updated["role"] = created_role_id
-                audit["role_resolved"] = {
-                    "input": role_value,
-                    "id": created_role_id,
-                }
-
-        # Ensure unmapped skills are created/resolved in Talent taxonomy.
+        # Skills: clean list only — no API calls, no catalog lookup.
         skills = updated.get("skills")
         if isinstance(skills, list):
-            clean_skills = [str(s).strip() for s in skills if str(s).strip()]
-            for skill in clean_skills:
-                created_or_exists = self.create_skill(skill)
-                if created_or_exists:
-                    audit["skills_resolved"].append(skill)
-            updated["skills"] = clean_skills
+            updated["skills"] = [str(s).strip() for s in skills if str(s).strip()]
 
         self._log_debug("Taxonomy audit result: %s", json.dumps(audit, ensure_ascii=False))
 
@@ -848,7 +836,8 @@ class TalentAPIClient:
                 {
                     "title": post_payload.get("title"),
                     "slug": post_payload.get("slug"),
-                    "role": post_payload.get("role"),
+                    "roleName": post_payload.get("roleName"),
+                    "categoryName": post_payload.get("categoryName"),
                     "department": post_payload.get("department"),
                     "level": post_payload.get("level"),
                     "country": post_payload.get("country"),
@@ -884,42 +873,8 @@ class TalentAPIClient:
                 self._response_snippet(response, limit=1000),
             )
 
-            # Recover from unresolved role string by creating/resolving and retrying once.
-            body_lower = (response.text or "").lower()
-            if (
-                response.status_code == 400
-                and "cast to objectid failed" in body_lower
-                and isinstance(post_payload.get("role"), str)
-                and not _OBJECT_ID_RE.match(str(post_payload.get("role") or "").strip())
-            ):
-                role_hint = str(post_payload.get("role") or "").strip()
-                resolved_role = self.create_job_role(
-                    role_name=role_hint,
-                    department=str(post_payload.get("department") or "").strip() or None,
-                )
-                if resolved_role:
-                    post_payload["role"] = resolved_role
-                    self._log_debug(
-                        "Retrying post after role resolution: role='%s' -> %s",
-                        role_hint,
-                        resolved_role,
-                    )
-                    retry_response = self._request(
-                        "POST",
-                        "/api/jobs/external/",
-                        json_payload=post_payload,
-                        max_attempts=self.request_max_retries,
-                    )
-                    if retry_response is not None:
-                        response = retry_response
-                        body_lower = (response.text or "").lower()
-                        self._log_debug(
-                            "Post external response after role-retry: status=%s body=%s",
-                            response.status_code,
-                            self._response_snippet(response, limit=1000),
-                        )
-
             # Recover from non-ASCII title slug issues by forcing deterministic ASCII slug.
+            body_lower = (response.text or "").lower()
             if response.status_code == 400 and "slug" in body_lower and "required" in body_lower:
                 forced_slug = self._build_ascii_slug(
                     str(post_payload.get("title") or "external-job"),
@@ -1124,17 +1079,20 @@ class ExternalJobPayloadBuilder:
         if not self.mistral:
             return []
 
-        prompt = f"""Convert the detected job roles into JSON payloads for an external jobs API.
+        prompt = f"""You are converting detected job role strings from a company's career page into structured JSON payloads for a job board API.
 
 Company: {company_name}
 Website: {website}
 Career Page: {career_page_url or "N/A"}
 Detected Roles: {json.dumps(job_roles)}
 
-Return ONLY a JSON array. One object per role. Use this exact schema:
+## OUTPUT FORMAT
+Return ONLY a valid JSON array (no markdown, no explanation). One object per role:
 [
   {{
-    "title": "string",
+    "title": "Senior Backend Engineer",
+    "roleName": "Backend Engineer",
+    "categoryName": "Engineering",
     "experience": 5,
     "vacancy": 1,
     "status": "open",
@@ -1144,41 +1102,73 @@ Return ONLY a JSON array. One object per role. Use this exact schema:
     "state": null,
     "city": null,
     "department": "Engineering",
-    "role": "role_id_or_role_name",
     "level": "Senior",
-    "maxBudget": 1500000,
-    "startDate": "2026-01-01T00:00:00.000Z",
-    "endDate": "2026-04-01T00:00:00.000Z",
-    "skills": ["Python"],
-    "description": "1-2 sentence role description",
-    "shortDescription": "short sentence",
+    "maxBudget": null,
+    "startDate": "2026-04-01T00:00:00.000Z",
+    "endDate": null,
+    "skills": ["Python", "Node.js"],
+    "description": "<p><strong>Role Overview:</strong> ...</p>",
+    "shortDescription": "Short one-line generic summary of the role.",
     "source": "external"
   }}
 ]
 
-Rules:
-- Return valid JSON only; no markdown wrappers.
-- Keep vacancy >= 1 and experience >= 0.
-- Use "external" as source.
-- If uncertain, use sensible defaults and keep values realistic.
-- Fill any missing fields intelligently from title/context.
-- Escape any double quotes inside string values.
-- If state/city are unknown, use null (not "N/A").
-- Description must be a detailed, generic JD (about 120-220 words), with sections and bullet points.
-- Use HTML in description for formatting (bold headings + bullet lists), example:
-  "<p><strong>Role Overview:</strong> ...</p><p><strong>Key Responsibilities:</strong></p><ul><li>...</li><li>...</li></ul>"
-- Do NOT mention any company name, website, or brand in description/shortDescription.
-- shortDescription should be concise (about 20-35 words) and generic.
-- Output ONLY English jobs. If a role/title is non-English, omit that item from output.
-- role must be human-readable role name (not slug/snake_case). Example: "Customer Support Agent", not "customer_support_agent".
-- Skills must be semantically aligned with the title; do not assign AI/ML skills to non-AI roles.
+## STRICT QUALITY RULES — READ CAREFULLY
+
+### Title Formatting
+- Title must be a clean, professional job title in Title Case. Example: "Senior Backend Engineer", NOT "senior backend engineer", NOT "SENIOR BACKEND ENGINEER", NOT "backend-engineer".
+- Keep the seniority prefix if present (e.g., Senior, Lead, Junior, Principal). De-slug any slugged or snake_case input: "senior_backend_engineer" → "Senior Backend Engineer".
+- Remove trailing punctuation, trailing numbers, and internal parentheses noise.
+- Do NOT include department/team info in the title (e.g., NOT "Backend Engineer - Engineering Team").
+- Expand well-known abbreviations: "SWE" → "Software Engineer", "SDE" → "Software Development Engineer", "QA" → "QA Engineer".
+
+### Garbage / Skip Rules — OMIT any detected role that matches these:
+- Non-English titles (Chinese, Korean, Japanese, Arabic, Cyrillic, etc.).
+- Physical / non-tech / non-professional roles: cook, dishwasher, driver, janitor, security guard, barista, waiter, cleaner, packer, labourer, factory worker, delivery, retail associate.
+- Vague or nonsensical strings: single characters, numbers only, internal codes (e.g., "REQ-1234"), URLs, email addresses.
+- Roles with no real job-title meaning after de-slugging.
+- Duplicate roles that are essentially the same as an already-included item (keep only the best-worded version).
+- Internships at a company that only detects one role AND that role is "intern" (skip to avoid noise).
+
+### Field Rules
+- `roleName`: The core role name without seniority prefix. Example: title="Senior Backend Engineer" → roleName="Backend Engineer".
+- `categoryName`: Must be one of: Engineering, Design, Product, Sales, Marketing, Operations, HR, Finance, Research, Support, General.
+- `department`: Must be one of: Engineering, Design, Product, Sales, Marketing, Operations, Research, Support, Business, General.
+- `level`: Must be one of: Junior, Mid-Level, Senior, Lead, Principal, Executive, Research Associate. Infer from title or context.
+- `experience`: Integer years, minimum 0. Infer from seniority: Junior=0-2, Mid-Level=2-4, Senior=4-8, Lead/Principal=6+.
+- `tenure`: Must be one of: full-time, part-time, contract, internship.
+- `jobType`: Array, values from: remote, hybrid, onsite. Default to ["remote"] if unknown.
+- `skills`: Array of 3–6 relevant, specific technology/skill strings. Must match the role (e.g., a DevOps role gets ["Docker", "Kubernetes", "Terraform"] not ["React", "Figma"]).
+- `maxBudget`: Use null if unknown. Do NOT guess a number for senior roles.
+- `startDate`: ISO 8601 UTC. Use a reasonable near-future date (within 60 days from today: 2026-03-06T00:00:00.000Z).
+- `endDate`: Use null.
+- `source`: Always "external".
+
+### Description Rules
+- Length: 150–250 words.
+- Format: HTML with `<p><strong>heading</strong></p>` and `<ul><li>...</li></ul>` lists.
+- Sections to include: Role Overview, Key Responsibilities (4–6 bullets), Requirements (3–5 bullets).
+- Do NOT mention the company name, website, or any brand.
+- Do NOT copy-paste boilerplate such as "We are an equal opportunity employer" or generic HR filler.
+- Keep it focused, realistic, and specific to the role's actual skills.
+
+### shortDescription Rules
+- 20–40 words. One sentence. Generic, no company name.
+- Example: "We're looking for a Senior Backend Engineer to design scalable microservices, optimize APIs, and lead cloud deployment initiatives."
+
+### Final Checklist before outputting
+- Every title is correctly Title Cased and de-slugged.
+- No garbage or non-tech roles in the output.
+- No duplicate titles.
+- skills array is role-specific (not generic).
+- Valid JSON only — no trailing commas, no markdown fences.
 """
         try:
             response = self._chat_complete_with_retry(
                 model="mistral-small-latest",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=900,
+                temperature=0.05,
+                max_tokens=1800,
                 max_attempts=3,
                 initial_backoff_seconds=12.0,
             )
@@ -1320,7 +1310,8 @@ Rules:
             "state": None,
             "city": None,
             "department": self._infer_department(clean_title),
-            "role": self.default_role_id or clean_title,
+            "roleName": self._format_role_name(clean_title),
+            "categoryName": self._infer_department(clean_title),
             "level": self._infer_level(clean_title),
             "maxBudget": 1500000,
             "startDate": start,
@@ -1393,68 +1384,54 @@ Rules:
             logger.info("Skipping unsupported external job title: %s", merged["title"])
             return None
 
-        role_value = str(merged.get("role", "")).strip()
-        if role_value and _OBJECT_ID_RE.match(role_value):
-            merged["role"] = role_value
-        else:
-            role_match = self.taxonomy.resolve_role(
-                role_hint=role_value,
-                title=merged["title"],
-                description=str(merged.get("description", "")),
-                threshold=0.72,
-            )
-            if role_match:
-                merged["role"] = role_match["_id"]
-            elif role_value:
-                merged["role"] = self.default_role_id or role_value
-                if not self.default_role_id:
-                    logger.warning(
-                        "Role mapping unresolved for '%s' (title='%s')",
-                        role_value,
-                        merged["title"],
-                    )
-            else:
-                merged["role"] = self.default_role_id or merged["title"]
-                if not self.default_role_id:
-                    logger.warning(
-                        "Role mapping unresolved with empty role hint (title='%s')",
-                        merged["title"],
-                    )
+        # ── Role: pass roleName + categoryName directly; no ObjectId creation ──
+        # Prefer explicit roleName from LLM output; fall back to de-slugged title.
+        role_name_raw = (
+            str(merged.get("roleName") or merged.get("role") or "").strip()
+            or merged["title"]
+        )
+        # Strip any leftover ObjectId so we never send a hex string as roleName.
+        if _OBJECT_ID_RE.match(role_name_raw):
+            role_name_raw = merged["title"]
+        merged["roleName"] = self._format_role_name(role_name_raw)
+        merged["categoryName"] = str(
+            merged.get("categoryName") or merged.get("department") or "Engineering"
+        ).strip()
+        # Remove the legacy 'role' ObjectId field — backend no longer expects it.
+        merged.pop("role", None)
 
         merged["level"] = self._normalize_level(
             value=merged.get("level"),
             fallback=default["level"],
         )
-        merged["maxBudget"] = self._as_int(
-            merged.get("maxBudget"),
-            default=default["maxBudget"],
-            min_value=0,
-        )
-        merged["startDate"] = self._normalize_date(merged.get("startDate"), default["startDate"])
-        merged["endDate"] = self._normalize_date(merged.get("endDate"), default["endDate"])
-        raw_skills = self._as_str_list(merged.get("skills"), default=default["skills"])
-        skill_matches = self.taxonomy.resolve_skills(
-            skill_hints=raw_skills,
-            title=merged["title"],
-            description=str(merged.get("description", "")),
-        )
-        if skill_matches:
-            # Keep payload schema unchanged: `skills` as array of strings.
-            merged["skills"] = [s["name"] for s in skill_matches]
+        # maxBudget: keep null if not explicitly set; don't force a default number.
+        raw_budget = merged.get("maxBudget")
+        if raw_budget is not None:
+            try:
+                budget_int = int(float(raw_budget))
+                merged["maxBudget"] = max(0, budget_int) if budget_int > 0 else None
+            except Exception:
+                merged["maxBudget"] = None
         else:
-            merged["skills"] = raw_skills
-            logger.warning(
-                "Skill mapping unresolved for title='%s' skills=%s",
-                merged["title"],
-                raw_skills,
-            )
-        merged["skills"] = self._align_skills_to_title(
-            title=merged["title"],
-            skills=self._as_str_list(merged.get("skills"), default=default["skills"]),
-        )
+            merged["maxBudget"] = None
+
+        merged["startDate"] = self._normalize_date(merged.get("startDate"), default["startDate"])
+        merged["endDate"] = self._normalize_date(merged.get("endDate"), None)
+
+        # ── Skills: plain string array, no catalog lookup or API creation ──
+        raw_skills = self._as_str_list(merged.get("skills"), default=default["skills"])
+        # Deduplicate while preserving order.
+        seen_skills: set = set()
+        clean_skills = []
+        for s in raw_skills:
+            key = s.strip().lower()
+            if key and key not in seen_skills:
+                seen_skills.add(key)
+                clean_skills.append(s.strip())
+        merged["skills"] = clean_skills or default["skills"]
         if self._contains_non_english_job_data(
             title=merged["title"],
-            role_hint=str(merged.get("role") or ""),
+            role_hint=str(merged.get("roleName") or ""),
             skills=merged.get("skills") or [],
         ):
             logger.info("Skipping non-English external job after taxonomy: title='%s'", merged["title"])
