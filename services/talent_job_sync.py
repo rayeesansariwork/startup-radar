@@ -1310,7 +1310,7 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
             "state": None,
             "city": None,
             "department": self._infer_department(clean_title),
-            "roleName": self._format_role_name(clean_title),
+            "roleName": TalentAPIClient._format_role_name(clean_title),
             "categoryName": self._infer_department(clean_title),
             "level": self._infer_level(clean_title),
             "maxBudget": 1500000,
