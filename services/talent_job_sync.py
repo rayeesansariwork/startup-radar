@@ -1136,7 +1136,7 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
 - `department`: Must be one of: Engineering, Design, Product, Sales, Marketing, Operations, Research, Support, Business, General.
 - `level`: Must be one of: Junior, Mid-Level, Senior, Lead, Principal, Executive, Research Associate. Infer from title or context.
 - `experience`: Integer years, minimum 0. Infer from seniority: Junior=0-2, Mid-Level=2-4, Senior=4-8, Lead/Principal=6+.
-- `tenure`: Must be one of: full-time, part-time, contract, internship.
+- `tenure`: Must be one of: full-time, part-time, contractual, internship.
 - `jobType`: Array, values from: remote, hybrid, onsite. Default to ["remote"] if unknown.
 - `skills`: Array of 3–6 relevant, specific technology/skill strings. Must match the role (e.g., a DevOps role gets ["Docker", "Kubernetes", "Terraform"] not ["React", "Figma"]).
 - `maxBudget`: Use null if unknown. Do NOT guess a number for senior roles.
@@ -1352,7 +1352,17 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
         merged["experience"] = self._as_int(merged.get("experience"), default=default["experience"], min_value=0)
         merged["vacancy"] = self._as_int(merged.get("vacancy"), default=default["vacancy"], min_value=1)
         merged["status"] = str(merged.get("status", "open")).strip().lower() or "open"
-        merged["tenure"] = str(merged.get("tenure", "full-time")).strip() or "full-time"
+        
+        raw_tenure = str(merged.get("tenure", default["tenure"])).strip().lower()
+        if "contract" in raw_tenure or "freelance" in raw_tenure or "occasional" in raw_tenure:
+            raw_tenure = "contractual"
+        elif "intern" in raw_tenure:
+            raw_tenure = "internship"
+        elif "part" in raw_tenure or "part-time" in raw_tenure:
+            raw_tenure = "part-time"
+        elif raw_tenure not in {"full-time", "part-time", "contractual", "internship"}:
+            raw_tenure = "full-time"
+        merged["tenure"] = raw_tenure
         merged["jobType"] = self._normalize_job_types(
             self._as_str_list(merged.get("jobType"), default=default["jobType"])
         )
