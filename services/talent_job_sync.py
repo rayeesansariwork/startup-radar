@@ -1,4 +1,4 @@
-"""
+﻿"""
 Talent API external jobs sync helpers.
 
 This module is intentionally isolated so daily outreach logic can stay unchanged
@@ -226,6 +226,15 @@ class TalentAPIClient:
         if title:
             prepared["title"] = title
 
+        role_name_text = str(
+            prepared.get("roleName")
+            or prepared.get("role")
+            or prepared.get("title")
+            or "Software Engineer"
+        ).strip()
+        prepared["roleName"] = self._format_role_name(role_name_text) or "Software Engineer"
+        prepared.pop("role", None)
+
         # Keep API payload type-compatible for optional fields.
         prepared["state"] = self._normalize_location_text(prepared.get("state"))
         prepared["city"] = self._normalize_location_text(prepared.get("city"))
@@ -236,7 +245,6 @@ class TalentAPIClient:
         prepared["slug"] = self._build_ascii_slug(slug_input or title, seed=slug_seed)
 
         return prepared
-
     def is_configured(self) -> bool:
         return bool(self.base_url and self.email and self.password)
 
@@ -780,7 +788,7 @@ class TalentAPIClient:
 
         Role and skill creation via API is intentionally removed.  We now rely on
         the backend to create the role from ``roleName`` + ``categoryName`` fields
-        and accept ``skills`` as a plain array of strings — no pre-creation needed.
+        and accept ``skills`` as a plain array of strings â€” no pre-creation needed.
         """
         updated = dict(payload or {})
         audit = {
@@ -797,7 +805,7 @@ class TalentAPIClient:
             updated.get("city"),
         )
 
-        # Skills: clean slug list only � no API calls, no catalog lookup.
+        # Skills: clean slug list only — no API calls, no catalog lookup.
         skills = updated.get("skills")
         if isinstance(skills, list):
             normalized_skills: List[str] = []
@@ -1123,16 +1131,16 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
   }}
 ]
 
-## STRICT QUALITY RULES — READ CAREFULLY
+## STRICT QUALITY RULES â€” READ CAREFULLY
 
 ### Title Formatting
 - Title must be a clean, professional job title in Title Case. Example: "Senior Backend Engineer", NOT "senior backend engineer", NOT "SENIOR BACKEND ENGINEER", NOT "backend-engineer".
-- Keep the seniority prefix if present (e.g., Senior, Lead, Junior, Principal). De-slug any slugged or snake_case input: "senior_backend_engineer" → "Senior Backend Engineer".
+- Keep the seniority prefix if present (e.g., Senior, Lead, Junior, Principal). De-slug any slugged or snake_case input: "senior_backend_engineer" â†’ "Senior Backend Engineer".
 - Remove trailing punctuation, trailing numbers, and internal parentheses noise.
 - Do NOT include department/team info in the title (e.g., NOT "Backend Engineer - Engineering Team").
-- Expand well-known abbreviations: "SWE" → "Software Engineer", "SDE" → "Software Development Engineer", "QA" → "QA Engineer".
+- Expand well-known abbreviations: "SWE" â†’ "Software Engineer", "SDE" â†’ "Software Development Engineer", "QA" â†’ "QA Engineer".
 
-### Garbage / Skip Rules — OMIT any detected role that matches these:
+### Garbage / Skip Rules â€” OMIT any detected role that matches these:
 - Non-English titles (Chinese, Korean, Japanese, Arabic, Cyrillic, etc.).
 - Physical / non-tech / non-professional roles: cook, dishwasher, driver, janitor, security guard, barista, waiter, cleaner, packer, labourer, factory worker, delivery, retail associate.
 - Vague or nonsensical strings: single characters, numbers only, internal codes (e.g., "REQ-1234"), URLs, email addresses.
@@ -1141,29 +1149,29 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
 - Internships at a company that only detects one role AND that role is "intern" (skip to avoid noise).
 
 ### Field Rules
-- `roleName`: The core role name without seniority prefix. Example: title="Senior Backend Engineer" → roleName="Backend Engineer".
+- `roleName`: The core role name without seniority prefix. Example: title="Senior Backend Engineer" â†’ roleName="Backend Engineer".
 - `categoryName`: Must be one of: Engineering, Design, Product, Sales, Marketing, Operations, HR, Finance, Research, Support, General.
 - `department`: Must be one of: Engineering, Design, Product, Sales, Marketing, Operations, Research, Support, Business, General.
 - `level`: Must be one of: Junior, Mid-Level, Senior, Lead, Principal, Executive, Research Associate. Infer from title or context.
 - `experience`: Integer years, minimum 0. Infer from seniority: Junior=0-2, Mid-Level=2-4, Senior=4-8, Lead/Principal=6+.
 - `tenure`: Must be one of: full-time, part-time, contractual, internship.
 - `jobType`: Array, values from: remote, hybrid, onsite. Default to ["remote"] if unknown.
-- `skills`: Array of 3–6 relevant, specific technology/skill strings. Must match the role (e.g., a DevOps role gets ["Docker", "Kubernetes", "Terraform"] not ["React", "Figma"]).
+- `skills`: Array of 3â€“6 relevant, specific technology/skill strings. Must match the role (e.g., a DevOps role gets ["Docker", "Kubernetes", "Terraform"] not ["React", "Figma"]).
 - `maxBudget`: Use null if unknown. Do NOT guess a number for senior roles.
 - `startDate`: ISO 8601 UTC. Use a reasonable near-future date (within 60 days from today: 2026-03-06T00:00:00.000Z).
 - `endDate`: Use null.
 - `source`: Always "external".
 
 ### Description Rules
-- Length: 150–250 words.
+- Length: 150â€“250 words.
 - Format: HTML with `<p><strong>heading</strong></p>` and `<ul><li>...</li></ul>` lists.
-- Sections to include: Role Overview, Key Responsibilities (4–6 bullets), Requirements (3–5 bullets).
+- Sections to include: Role Overview, Key Responsibilities (4â€“6 bullets), Requirements (3â€“5 bullets).
 - Do NOT mention the company name, website, or any brand.
 - Do NOT copy-paste boilerplate such as "We are an equal opportunity employer" or generic HR filler.
 - Keep it focused, realistic, and specific to the role's actual skills.
 
 ### shortDescription Rules
-- 20–40 words. One sentence. Generic, no company name.
+- 20â€“40 words. One sentence. Generic, no company name.
 - Example: "We're looking for a Senior Backend Engineer to design scalable microservices, optimize APIs, and lead cloud deployment initiatives."
 
 ### Final Checklist before outputting
@@ -1171,7 +1179,7 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
 - No garbage or non-tech roles in the output.
 - No duplicate titles.
 - skills array is role-specific (not generic).
-- Valid JSON only — no trailing commas, no markdown fences.
+- Valid JSON only â€” no trailing commas, no markdown fences.
 """
         try:
             response = self._chat_complete_with_retry(
@@ -1404,7 +1412,7 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
             logger.info("Skipping unsupported external job title: %s", merged["title"])
             return None
 
-        # ── Role: pass roleName + categoryName directly; no ObjectId creation ──
+        # â”€â”€ Role: pass roleName + categoryName directly; no ObjectId creation â”€â”€
         # Prefer explicit roleName from LLM output; fall back to de-slugged title.
         role_name_raw = (
             str(merged.get("roleName") or merged.get("role") or "").strip()
@@ -1417,7 +1425,7 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
         merged["categoryName"] = str(
             merged.get("categoryName") or merged.get("department") or "Engineering"
         ).strip()
-        # Remove the legacy 'role' ObjectId field — backend no longer expects it.
+        # Remove the legacy 'role' ObjectId field â€” backend no longer expects it.
         merged.pop("role", None)
 
         merged["level"] = self._normalize_level(
@@ -1438,7 +1446,7 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
         merged["startDate"] = self._normalize_date(merged.get("startDate"), default["startDate"])
         merged["endDate"] = self._normalize_date(merged.get("endDate"), None)
 
-        # ── Skills: plain string array, no catalog lookup or API creation ──
+        # â”€â”€ Skills: plain string array, no catalog lookup or API creation â”€â”€
         raw_skills = self._as_str_list(merged.get("skills"), default=default["skills"])
         # Deduplicate while preserving order.
         seen_skills: set = set()
@@ -1899,3 +1907,6 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
         if "data" in t or "ml" in t or "ai" in t:
             return ["Python", "SQL"]
         return ["Communication"]
+
+
+
