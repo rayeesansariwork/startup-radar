@@ -797,10 +797,20 @@ class TalentAPIClient:
             updated.get("city"),
         )
 
-        # Skills: clean list only â€” no API calls, no catalog lookup.
+        # Skills: clean slug list only — no API calls, no catalog lookup.
         skills = updated.get("skills")
         if isinstance(skills, list):
-            updated["skills"] = [str(s).strip() for s in skills if str(s).strip()]
+            normalized_skills: List[str] = []
+            seen: set[str] = set()
+            for skill in skills:
+                raw = str(skill).strip()
+                if not raw:
+                    continue
+                skill_slug = self._build_ascii_slug(raw)
+                if skill_slug and skill_slug not in seen:
+                    seen.add(skill_slug)
+                    normalized_skills.append(skill_slug)
+            updated["skills"] = normalized_skills
 
         self._log_debug("Taxonomy audit result: %s", json.dumps(audit, ensure_ascii=False))
 
