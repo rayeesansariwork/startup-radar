@@ -44,7 +44,7 @@ class CRMClient:
                 url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=10
+                timeout=60
             )
             
             if response.status_code == 200:

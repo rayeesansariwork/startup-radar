@@ -18,22 +18,24 @@ import requests
 import json
 import sys
 from datetime import datetime, timedelta
+from config import settings
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
-CRM_BASE_URL = "https://salesapi.gravityer.com/api/v1"
+CRM_BASE_URL = settings.crm_base_url.rstrip("/")
 HIRING_API_URL = "https://startup-radar-1.onrender.com/api/hiring"
 
 CRM_CREDENTIALS = {
-    "email": "sankalp@admin.com",
-    "password": "0h%Bx}jB*SO}"
+    "email": settings.crm_email,
+    "password": settings.crm_password,
 }
 
 # Funding signal keywords — trigger a stronger outreach email
 FUNDING_KEYWORDS = ["raised", "funding", "$", "valuation", "million", "billion", "seed", "series"]
 
 # Gravity signature
-GRAVITY_SIGNATURE = "\n\nBest regards,\nGravity Team\ninfo@gravityer.com"
+_cta_html = f'\n\n<img src="{settings.outreach_cta_banner}" style="max-width: 100px; height: auto;">' if settings.outreach_cta_banner else ""
+GRAVITY_SIGNATURE = f"\n\nRegards,\nGravity Team\n{settings.outreach_phone or ''}\n{settings.outreach_website or ''}{_cta_html}"
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────

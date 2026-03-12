@@ -281,7 +281,11 @@ Return ONLY a JSON array of cleaned job titles:
         company_name: str,
         job_roles: List[str],
         funding_info: Optional[str] = None,
-        sender_email: str = "shilpi.bhatia@gravityer.com",
+        sender_name: Optional[str] = None,
+        sender_title: Optional[str] = None,
+        sender_phone: Optional[str] = None,
+        sender_website: Optional[str] = None,
+        cta_banner: Optional[str] = None,
         max_retries: int = 2
     ) -> Optional[Dict]:
         """
@@ -312,7 +316,7 @@ Return ONLY a JSON array of cleaned job titles:
         else:
             funding_congrats = ""
 
-        prompt = f"""Write a highly concise, warm B2B cold outreach email from Shilpi Bhatia (Gravity Engineering Services) to a hiring decision-maker at {company_name}.
+        prompt = f"""Write a highly concise, warm B2B cold outreach email from {sender_name} (Gravity Engineering Services) to a hiring decision-maker at {company_name}.
 
 Follow this EXACT structure and tone. Only swap in the details from the context below — do NOT change sentence structure or add extra sections. Keep it extremely brief and punchy.
 
@@ -372,24 +376,23 @@ Return ONLY valid JSON, no markdown fences:
                 subject = _clean_body(data.get('subject', ''))
 
                 # Ensure signature is always present and correctly formatted
-                cta_banner = (
-                    '\n\n<img src="https://ci3.googleusercontent.com/mail-sig/AIorK4zzPing2FyYjR1YFA-fvADgwE2cUWzzqE3RXGzQjp5AKHwa7Prc33GyN-XnlAjsCkWjxa_f7p2rlRNd" '
-                    'width="100" height="29" alt="Gravity Engineering" '
-                    'style="display:block;border:none;" />'
-                )
+                cta_html = f'\n\n<img src="{cta_banner}" style="max-width: 100px; height: auto;">' if cta_banner else ""
                 signature = (
-                    "\n\nBest,\n"
-                    "Shilpi Bhatia"
+                    "\n\nRegards,\n"
+                    f"{sender_name}\n"
+                    f"{sender_title}\n"
+                    f"{sender_phone}\n"
+                    f"{sender_website}"
                 )
                 # Strip any partial signature the LLM may have appended, then re-add ours
-                for marker in ["Best,", "Shilpi Bhatia", "Senior BDM", "Best regards", "Sincerely", "Thanks,", "cheers,"]:
+                for marker in ["Regards,", "Best,", sender_name, sender_title, "Shilpi Bhatia", "Senior BDM", "Best regards", "Sincerely", "Thanks,", "cheers,"]:
                     if marker in body:
                         # only strip if it's near the end of the text to prevent rare false positives
                         if body.rindex(marker) > len(body) * 0.5:
                             body = body[:body.rindex(marker)].rstrip()
                             break
                             
-                body = body + signature + cta_banner
+                body = body + signature + cta_html
 
                 if not body or not subject:
                     raise ValueError("Empty subject or body in response")
