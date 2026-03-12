@@ -138,25 +138,29 @@ class EmailQueueService:
                 else:
                     # In actual production, hit the core SalesTechBE endpoint
                     try:
-                        logger.info(f"🚀 [PRODUCTION] Executing real HTTP POST to SalesTechBE for {effective_to}... ")
+                        sender_email = payload.get("sender_email")
+                        senders_registry = settings.get_outreach_senders()
+                        
+                        # Find the sender config in registry, fallback to default shilpi if not found
+                        sender_config = next((s for s in senders_registry if s["email"].lower() == (sender_email or "").lower()), None)
+                        
+                        if not sender_config:
+                            # Try to match by name if email is missing (for legacy or fallback)
+                            sender_config = senders_registry[0] # Default to first (Shilpi)
+                            logger.warning(f"⚠️ No specific sender config for {sender_email}. Falling back to {sender_config['name']}")
 
-                        configured_sender = (settings.shilpi_crm_email or "").strip().lower()
-                        required_sender = (settings.outreach_sender_email or "").strip().lower()
+                        target_email = sender_config["email"]
+                        target_password = sender_config["password"]
+                        target_name = sender_config["name"]
 
-                        if not settings.shilpi_crm_email or not settings.shilpi_crm_password:
-                            logger.error("❌ CRITICAL: Shilpi CRM Auth is missing from config. Cannot send real email.")
-                        elif required_sender and configured_sender != required_sender:
-                            logger.error(
-                                "❌ CRITICAL: Outreach sender mismatch. "
-                                f"Expected {settings.outreach_sender_email}, got {settings.shilpi_crm_email}. "
-                                "Skipping real email dispatch to preserve sender ownership."
-                            )
+                        if not target_email or not target_password:
+                            logger.error(f"❌ CRITICAL: Sender Auth is missing for {target_name}. Cannot send real email.")
                         else:
                             # 1. Always Auth to ensure valid token for long queues
                             auth_resp = requests.post(f"{settings.crm_base_url}/token/obtain/", json={
-                                "email": settings.shilpi_crm_email,
-                                "password": settings.shilpi_crm_password
-                            }, timeout=10)
+                                "email": target_email,
+                                "password": target_password
+                            }, timeout=30)
                             
                             if auth_resp.status_code == 200:
                                 jwt_token = auth_resp.json().get("access")
@@ -173,10 +177,10 @@ class EmailQueueService:
                                     "body": body_to_html(body)   # convert to proper HTML
                                 }
                                 
-                                req = requests.post(endpoint, headers=headers, json=mail_payload, timeout=20)
+                                req = requests.post(endpoint, headers=headers, json=mail_payload, timeout=60)
                                 if req.status_code == 200:
                                     logger.info(
-                                        f"✅ Success: Real email dispatched via {settings.outreach_sender_email} "
+                                        f"✅ Success: Real email dispatched via {target_name} ({target_email}) "
                                         f"to {effective_to}"
                                     )
                                     
@@ -185,14 +189,14 @@ class EmailQueueService:
                                         mark_req = requests.post(
                                             f"{settings.crm_base_url}/hiring-outreach-results/{result_id}/send_email/",
                                             headers=headers,
-                                            timeout=10
+                                            timeout=30
                                         )
                                         if mark_req.status_code == 200:
                                             logger.info(f"✅ Marked Outreach Result ID {result_id} as email_sent in SalesTechBE")
                                 else:
                                     logger.error(f"❌ Failed to dispatch real email to {effective_to}: {req.status_code} - {req.text}")
                             else:
-                                logger.error(f"❌ JobProspectorBE could not authenticate as Shilpi Bhatia: {auth_resp.text}")
+                                logger.error(f"❌ JobProspectorBE could not authenticate as {target_name}: {auth_resp.text}")
                     except Exception as e:
                         logger.error(f"❌ HTTP Exception sending real email to {effective_to}: {e}")
                 
@@ -211,4 +215,4 @@ class EmailQueueService:
                 await asyncio.sleep(self.delay_seconds)
 
 # Global singleton instance for the app to use
-email_queue = EmailQueueService(delay_seconds=900, send_real_emails=settings.send_real_emails)
+email_queue = EmailQueueService(delay_seconds=180, send_real_emails=settings.send_real_emails)

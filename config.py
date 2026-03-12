@@ -58,10 +58,68 @@ class Settings(BaseSettings):
     send_real_emails: bool = False
     outreach_email_override_to: Optional[str] = None
     daily_outreach_email_enabled: bool = False
-    outreach_sender_email: str = "shilpi.bhatia@gravityer.com"
+    outreach_sender_email: str = ""
     shilpi_crm_email: Optional[str] = None
     shilpi_crm_password: Optional[str] = None
     shilpi_crm_access_token: Optional[str] = None
+    shilpi_title: Optional[str] = None
+
+    sankalp_crm_email: Optional[str] = None
+    sankalp_crm_password: Optional[str] = None
+    sankalp_title: Optional[str] = None
+
+    kamalika_crm_email: Optional[str] = None
+    kamalika_crm_password: Optional[str] = None
+    kamalika_title: Optional[str] = None
+
+    alok_crm_email: Optional[str] = None
+    alok_crm_password: Optional[str] = None
+    alok_title: Optional[str] = None
+
+    outreach_phone: Optional[str] = None
+    outreach_website: Optional[str] = None
+    outreach_cta_banner: Optional[str] = None
+
+    # Round Robin Senders
+    def get_outreach_senders(self):
+        return [
+            {
+                "name": "Shilpi Bhatia",
+                "email": (self.shilpi_crm_email or self.outreach_sender_email or "").strip(),
+                "password": (self.shilpi_crm_password or "").strip(),
+                "title": (self.shilpi_title or "").strip(),
+                "phone": (self.outreach_phone or "").strip(),
+                "website": (self.outreach_website or "").strip(),
+                "cta_banner": (self.outreach_cta_banner or "").strip()
+            },
+            {
+                "name": "Sankalp Jangid",
+                "email": (self.sankalp_crm_email or "").strip(),
+                "password": (self.sankalp_crm_password or "").strip(),
+                "title": (self.sankalp_title or "").strip(),
+                "phone": (self.outreach_phone or "").strip(),
+                "website": (self.outreach_website or "").strip(),
+                "cta_banner": (self.outreach_cta_banner or "").strip()
+            },
+            {
+                "name": "Kamalika Ghosh",
+                "email": (self.kamalika_crm_email or "").strip(),
+                "password": (self.kamalika_crm_password or "").strip(),
+                "title": (self.kamalika_title or "").strip(),
+                "phone": (self.outreach_phone or "").strip(),
+                "website": (self.outreach_website or "").strip(),
+                "cta_banner": (self.outreach_cta_banner or "").strip()
+            },
+            {
+                "name": "Alok Ranjan",
+                "email": (self.alok_crm_email or "").strip(),
+                "password": (self.alok_crm_password or "").strip(),
+                "title": (self.alok_title or "").strip(),
+                "phone": (self.outreach_phone or "").strip(),
+                "website": (self.outreach_website or "").strip(),
+                "cta_banner": (self.outreach_cta_banner or "").strip()
+            },
+        ]
 
     # Talent API External Job Sync (optional)
     talent_api_enabled: bool = False

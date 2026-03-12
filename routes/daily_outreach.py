@@ -219,18 +219,9 @@ def _detect_team(company: dict) -> str:
     return "Engineering"
 
 
-CTA_BANNER = (
-    '\n\n<img src="https://ci3.googleusercontent.com/mail-sig/AIorK4zzPing2FyYjR1YFA-fvADgwE2cUWzzqE3RXGzQjp5AKHwa7Prc33GyN-XnlAjsCkWjxa_f7p2rlRNd" '
-    'width="100" height="29" alt="Gravity Engineering" '
-    'style="display:block;border:none;" />'
-)
-
-SIGNATURE = (
-    "\n\nBest,\n"
-    "Shilpi Bhatia"
-)
-
-FULL_SIGNATURE = SIGNATURE + CTA_BANNER
+def get_full_signature(sender_name: str, sender_title: str, sender_phone: str, sender_website: str, cta_banner: str = "") -> str:
+    cta_html = f'\n\n<img src="{cta_banner}" style="max-width: 100px; height: auto;">' if cta_banner else ""
+    return f"\n\nRegards,\n{sender_name}\n{sender_title}\n{sender_phone}\n{sender_website}" + cta_html
 
 
 # ─── C-suite contact simulation ─────────────────────────────────────────────
@@ -293,6 +284,11 @@ def generate_mail(
     is_hiring: bool = False,
     job_count: int = 0,
     job_roles: list[str] | None = None,
+    sender_name: Optional[str] = None,
+    sender_title: Optional[str] = None,
+    sender_phone: Optional[str] = None,
+    sender_website: Optional[str] = None,
+    cta_banner: str = "",
 ) -> dict:
     """
     Generate an outreach email following the same structure as the AI-generated
@@ -344,17 +340,21 @@ def generate_mail(
         "If optimizing costs without compromising technical leadership is a priority, do you have <b>10 mins</b> next week?"
     )
 
-    body = "\n\n".join(body_parts) + FULL_SIGNATURE
-
+    body = "\n\n".join(body_parts)
     return {"subject": subject, "body": body, "team_focus": team}
 
 
 def generate_personalized_mail(
-    company: dict, contact: dict, all_contacts: list[dict], base_mail: dict
+    company: dict, 
+    contact: dict, 
+    all_contacts: list[dict], 
+    base_mail: dict,
+    sender_info: dict
 ) -> dict:
     """
     Re-address a generated email to a specific C-suite contact and cross-reference others.
-    Returns {"to", "to_name", "to_title", "subject", "body"}.
+    Appends the specific sender's signature.
+    Returns {"to", "to_name", "to_title", "subject", "body", "sender_email"}.
     """
     first_name = contact["name"].split()[0]
     company_name = company.get("company_name", "there")
@@ -391,7 +391,20 @@ def generate_personalized_mail(
         f"Hey {company_name} team,\n\n", ""
     ).strip()
     
-    body = f"{greeting}{body}"
+    # Strip existing signature if present (prevent double signatures from AI base)
+    if "Regards," in body:
+        body = body[:body.rindex("Regards,")].rstrip()
+    
+    # Construct the sender-specific signature
+    signature = get_full_signature(
+        sender_info["name"],
+        sender_info.get("title", ""),
+        sender_info.get("phone", ""),
+        sender_info.get("website", ""),
+        sender_info.get("cta_banner", "")
+    )
+    
+    body = f"{greeting}{body}{signature}"
 
     return {
         "to": contact["email"],
@@ -399,6 +412,7 @@ def generate_personalized_mail(
         "to_title": contact["title"],
         "subject": base_mail["subject"],
         "body": body,
+        "sender_email": sender_info["email"]
     }
 
 
@@ -758,6 +772,11 @@ async def _stream(
     pending_external_jobs: list[dict] = []
     talent_jobs_created: list[dict] = []
 
+    # ── Round Robin Setup ──
+    outreach_senders = settings.get_outreach_senders()
+    sender_count = len(outreach_senders)
+    global_contact_sender_idx = 0  # index for round-robin assignment PER CONTACT
+
     for idx, company in enumerate(companies, 1):
         name = company.get("company_name", "Unknown")
         website = company.get("website", "")
@@ -880,6 +899,14 @@ async def _stream(
             continue
 
         # ── Generate mail ──
+        #   • Base sender for AI/template generation (we'll swap signatures later)
+        primary_sender = outreach_senders[0]
+        primary_name = primary_sender["name"]
+        primary_title = primary_sender.get("title")
+        primary_phone = primary_sender.get("phone")
+        primary_website = primary_sender.get("website")
+        primary_cta = primary_sender.get("cta_banner", "")
+
         #   • Hiring companies → Mistral AI (tailored, role-aware)
         #   • Non-hiring       → fast template
         try:
@@ -888,7 +915,7 @@ async def _stream(
                 funding_info = _funding_snippet(company) or None
                 yield _sse("log", {
                     "message": f"   🤖 Generating AI-tailored email for {name} "
-                               f"({result_entry['job_count']} roles) …"
+                               f"({result_entry['job_count']} roles) ..."
                 })
                 ai_mail = await loop.run_in_executor(
                     None,
@@ -896,10 +923,16 @@ async def _stream(
                     name,
                     result_entry["job_roles"],
                     funding_info,
+                    primary_name,
+                    primary_title,
+                    primary_phone,
+                    primary_website,
+                    primary_cta,
                 )
                 if ai_mail and ai_mail.get("body"):
-                    # NOTE: analyzer.py already strips any LLM-written signature and
-                    # re-adds "Best, Shilpi Bhatia" + CTA banner — do NOT append SIGNATURE here.
+                    # Strip any signature the AI might have added (we add it back per-contact)
+                    base_body = ai_mail["body"]
+                    # JobAnalyzer usually appends signature at the end. We'll rely on personalization to fix it.
                     result_entry["custom_mail"] = ai_mail
                     result_entry["mail_source"] = "mistral_ai"
                     mails_generated += 1
@@ -914,6 +947,11 @@ async def _stream(
                         is_hiring=True,
                         job_count=result_entry["job_count"],
                         job_roles=result_entry["job_roles"],
+                        sender_name=primary_name,
+                        sender_title=primary_title,
+                        sender_phone=primary_phone,
+                        sender_website=primary_website,
+                        cta_banner=primary_cta,
                     )
                     result_entry["custom_mail"] = mail
                     result_entry["mail_source"] = "template_fallback"
@@ -925,6 +963,11 @@ async def _stream(
                     is_hiring=result_entry["is_hiring"],
                     job_count=result_entry["job_count"],
                     job_roles=result_entry["job_roles"],
+                    sender_name=primary_name,
+                    sender_title=primary_title,
+                    sender_phone=primary_phone,
+                    sender_website=primary_website,
+                    cta_banner=primary_cta,
                 )
                 result_entry["custom_mail"] = mail
                 result_entry["mail_source"] = "template"
@@ -938,12 +981,18 @@ async def _stream(
                     is_hiring=result_entry["is_hiring"],
                     job_count=result_entry["job_count"],
                     job_roles=result_entry["job_roles"],
+                    sender_name=primary_name,
+                    sender_title=primary_title,
+                    sender_phone=primary_phone,
+                    sender_website=primary_website,
+                    cta_banner=primary_cta,
                 )
                 result_entry["mail_source"] = "template_fallback"
                 mails_generated += 1
             except Exception:
                 result_entry["custom_mail"] = None
                 result_entry["mail_source"] = "failed"
+                result_entry["sender_email"] = None
 
         # ── Find C-suite contacts (Apollo API) ──
         domain = (website or "").replace("https://", "").replace("http://", "").strip("/")
@@ -985,16 +1034,24 @@ async def _stream(
                 except Exception as e:
                     logger.error("Error syncing Apollo contacts to SalesTechBE for %s: %s", name, e)
 
-                # Personalize mail to all found contacts
+                # Personalize mail to all found contacts with Round-Robin Senders
                 if result_entry["custom_mail"]:
                     personalized_list = []
                     for contact in contacts:
+                        sender_info = outreach_senders[global_contact_sender_idx % sender_count]
+                        global_contact_sender_idx += 1
+
                         personalized = generate_personalized_mail(
-                            company, contact, contacts, result_entry["custom_mail"]
+                            company, contact, contacts, result_entry["custom_mail"], sender_info
                         )
                         personalized_list.append(personalized)
+                        
+                        # Set the primary sender_email for this result entry based on the first contact
+                        if not result_entry.get("sender_email"):
+                            result_entry["sender_email"] = sender_info["email"]
+
                         yield _sse("log", {
-                            "message": f"   ✉️  Personalized email prepared for {personalized['to']} ({personalized['to_title']})"
+                            "message": f"   ✉️  Personalized email (from {sender_info['name']}) prepared for {personalized['to']} ({personalized['to_title']})"
                         })
                     result_entry["personalized_email"] = personalized_list
             else:
@@ -1214,7 +1271,9 @@ async def _stream(
                 returned_results = []
                 yield _sse("log", {"message": "Outreach email workflow disabled: skipping queued dispatch"})
             
-            # ── Enqueue emails now that we have SalesTechBE IDs ──
+            # Create a more robust mapping from company_name to processed data
+            processed_map = {entry["company_name"]: entry for entry in processed if entry.get("company_name")}
+            
             queued_count = 0
             outreach_override_to = (settings.outreach_email_override_to or "").strip()
             if outreach_override_to:
@@ -1223,11 +1282,18 @@ async def _stream(
                     {"message": f"Outreach recipient override active: {outreach_override_to}"},
                 )
             for r in returned_results:
+                comp_name = r.get("company_name")
+                orig_entry = processed_map.get(comp_name)
+                
+                # Check results from CRM first, fall back to local processed data
                 personalized_data = r.get("personalized_email")
+                if not personalized_data and orig_entry:
+                    personalized_data = orig_entry.get("personalized_email")
+
                 if personalized_data and r.get("id"):
                     # Handle both new (list) and old (dict) structures
                     emails_to_send = personalized_data if isinstance(personalized_data, list) else [personalized_data]
-                    already_emailed = r.get("email_sent", False) # The requested boolean 
+                    already_emailed = r.get("email_sent", False) 
                     
                     # Only enqueue if it hasn't somehow already been marked as sent
                     if not already_emailed:
@@ -1238,12 +1304,18 @@ async def _stream(
                                 if outreach_override_to
                                 else personalized["to_name"]
                             )
+                            sender_email = (
+                                personalized.get("sender_email") 
+                                or r.get("sender_email") 
+                                or (orig_entry.get("sender_email") if orig_entry else None)
+                            )
                             payload = {
                                 "result_id": r["id"],
                                 "to": target_to,
                                 "to_name": target_name,
                                 "subject": personalized["subject"],
                                 "body": personalized["body"],
+                                "sender_email": sender_email,
                                 "already_emailed": False
                             }
                             
