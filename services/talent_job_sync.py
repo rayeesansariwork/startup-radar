@@ -1,4 +1,4 @@
-﻿"""
+"""
 Talent API external jobs sync helpers.
 
 This module is intentionally isolated so daily outreach logic can stay unchanged
@@ -56,18 +56,24 @@ _ALLOWED_DEPARTMENTS = {
 _ROLE_CATEGORIES = {"Designer", "Developer", "HR", "Manager", "Marketing", "Partnership", "Sales"}
 
 _UNSUPPORTED_TITLE_KEYWORDS = (
-    "restaurant",
-    "dishwasher",
-    "prep cook",
-    "line cook",
-    "food service",
-    "kitchen",
-    "chef",
-    "barista",
-    "waiter",
-    "waitress",
-    "hostess",
+    # Food / hospitality
+    "restaurant", "dishwasher", "prep cook", "line cook", "food service",
+    "kitchen", "chef", "barista", "waiter", "waitress", "hostess", "server",
+    "busser", "sommelier", "baker", "pastry",
+    # Healthcare / medical
+    "nurse", "physician", "doctor", "pharmacist", "dentist", "therapist",
+    "paramedic", "radiologist", "surgeon", "caregiver", "vet technician",
+    "medical assistant", "phlebotomist", "optometrist", "occupational therapy",
+    # Physical / trade / logistics
+    "driver", "delivery", "janitor", "cleaner", "warehouse", "packer",
+    "labourer", "laborer", "factory worker", "security guard", "retail associate",
+    "cashier", "stocker", "forklift", "sanitation", "custodian", "mechanic",
+    "plumber", "electrician", "carpenter", "welder", "painter",
+    # Other non-tech
+    "social worker", "counsellor", "counselor",
+    "real estate agent", "insurance agent",
 )
+
 _TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 _RETRYABLE_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 _DISALLOWED_SCRIPT_RE = re.compile(
@@ -1097,7 +1103,8 @@ class ExternalJobPayloadBuilder:
         if not self.mistral:
             return []
 
-        prompt = f"""You are converting detected job role strings from a company's career page into structured JSON payloads for a job board API.
+        today = "2026-03-12"
+        prompt = f"""You are a strict job schema generator. Convert detected job role strings from a company career page into structured JSON payloads for a technical job board API.
 
 Company: {company_name}
 Website: {website}
@@ -1105,7 +1112,7 @@ Career Page: {career_page_url or "N/A"}
 Detected Roles: {json.dumps(job_roles)}
 
 ## OUTPUT FORMAT
-Return ONLY a valid JSON array (no markdown, no explanation). One object per role:
+Return ONLY a valid JSON array (no markdown, no code fences, no explanation). One object per role:
 [
   {{
     "title": "Senior Backend Engineer",
@@ -1122,7 +1129,7 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
     "department": "Engineering",
     "level": "Senior",
     "maxBudget": null,
-    "startDate": "2026-04-01T00:00:00.000Z",
+    "startDate": "{today}T00:00:00.000Z",
     "endDate": null,
     "skills": ["Python", "Node.js"],
     "description": "<p><strong>Role Overview:</strong> ...</p>",
@@ -1131,55 +1138,123 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
   }}
 ]
 
-## STRICT QUALITY RULES â€” READ CAREFULLY
+## STEP 1 — TECHNICAL-ONLY GATE (apply this FIRST, before anything else)
+This job board is for technology and knowledge-work roles ONLY.
+IMMEDIATELY OMIT any role that is not a genuine professional/technical job, including:
+- Healthcare: nurse, physician, doctor, pharmacist, dentist, therapist, surgeon, caregiver, paramedic, radiologist, medical assistant, phlebotomist, vet technician
+- Food/Hospitality: cook, chef, dishwasher, barista, waiter, server, busser, kitchen staff, baker, sommelier
+- Physical/Trade: driver, delivery person, janitor, cleaner, warehouse worker, packer, labourer, factory worker, security guard, forklift operator, mechanic, plumber, electrician, carpenter, welder, painter, custodian, sanitation worker
+- Non-technical professionals: cashier, retail associate, real estate agent, insurance agent, social worker, counsellor, teacher (non-tech)
+If uncertain, OMIT the role. Fewer clean records beats including garbage.
 
-### Title Formatting
-- Title must be a clean, professional job title in Title Case. Example: "Senior Backend Engineer", NOT "senior backend engineer", NOT "SENIOR BACKEND ENGINEER", NOT "backend-engineer".
-- Keep the seniority prefix if present (e.g., Senior, Lead, Junior, Principal). De-slug any slugged or snake_case input: "senior_backend_engineer" â†’ "Senior Backend Engineer".
-- Remove trailing punctuation, trailing numbers, and internal parentheses noise.
+## STEP 2 — TITLE FORMATTING
+- Use Title Case: "Senior Backend Engineer" NOT "senior backend engineer" or "BACKEND-ENGINEER"
+- De-slug: "senior_backend_engineer" -> "Senior Backend Engineer"
+- Expand abbreviations: SWE->Software Engineer, SDE->Software Development Engineer, QA->QA Engineer, PM->Product Manager, EM->Engineering Manager, ML->Machine Learning
+- Remove trailing punctuation, trailing numbers, and parenthetical noise like "(Bangalore)"
+- Do NOT append team/department after the title
+
+## STEP 3 — EXACT ENUM VALUES (use ONLY these values, no variations)
+
+`tenure` must be exactly one of:
+  full-time | part-time | contractual | internship
+
+`jobType` array items must each be exactly one of:
+  remote | hybrid | onsite
+  Default to ["remote"] if unknown.
+
+`department` must be exactly one of:
+  Business | Design | Engineering | General | Operations | Product | Research | Support
+
+`level` must be exactly one of:
+  Lead | Senior | Mid-Level | Junior | Entry-Level | Executive | Research Associate
+  Mapping: Sr/Senior->Senior, Lead/Principal/Staff/Architect->Lead, Jr/Junior/Trainee->Junior, Intern->Entry-Level, VP/CXO/C-Level->Executive
+
+`categoryName` must be exactly one of:
+  Engineering | Design | Product | Sales | Marketing | Operations | HR | Finance | Research | Support | General
+
+`experience` must be an integer from 1 to 9 (inclusive). Never 0, never above 9.
+  Mapping: Entry-Level=1, Junior=2, Mid-Level=3, Senior=5, Lead=7, Executive=8
+  If a role truly requires 10+ years, cap at 9.
+
+`roleName` = title without seniority prefix.
+  "Senior Backend Engineer" -> roleName: "Backend Engineer"
+
+## STEP 4 — SKILLS RULES
+- Each skill must be a plain human-readable name. Examples: "Node.js", "Python", "Docker", "System Design", "React"
+- NEVER use slugs, snake_case, or kebab-case: "node-js" is WRONG, "machine_learning" is WRONG
+- 3-6 skills per role, semantically aligned with the title
+- DevOps role -> ["Docker", "Kubernetes", "Terraform"] NOT ["React", "Figma"]
+
+## STEP 5 — DESCRIPTION
+- 150-250 words
+- HTML format: <p><strong>Heading</strong></p> and <ul><li>...</li></ul>
+- Sections: Role Overview, Key Responsibilities (4-6 bullets), Requirements (3-5 bullets)
+- No company name, website, or brand mentions
+- No filler: no "equal opportunity employer", no "competitive compensation"
+
+## shortDescription
+- 20-40 words, one sentence, no company name
+- Example: "We're looking for a Senior Backend Engineer to design scalable microservices, optimize APIs, and lead cloud deployment initiatives."
+
+---
+
+## SUPPLEMENTARY QUALITY RULES (reinforcing checks — apply at every step)
+
+### Title Formatting (detailed)
+- Title must be in Title Case. Example: "Senior Backend Engineer", NOT "senior backend engineer", NOT "SENIOR BACKEND ENGINEER", NOT "backend-engineer".
+- Keep the seniority prefix if present (e.g., Senior, Lead, Junior, Principal). De-slug snake_case or kebab-case input: "senior_backend_engineer" -> "Senior Backend Engineer".
+- Remove trailing punctuation, trailing numbers, and parenthetical noise (e.g., "(Bangalore)").
 - Do NOT include department/team info in the title (e.g., NOT "Backend Engineer - Engineering Team").
-- Expand well-known abbreviations: "SWE" â†’ "Software Engineer", "SDE" â†’ "Software Development Engineer", "QA" â†’ "QA Engineer".
+- Expand well-known abbreviations: "SWE" -> "Software Engineer", "SDE" -> "Software Development Engineer", "QA" -> "QA Engineer".
 
-### Garbage / Skip Rules â€” OMIT any detected role that matches these:
-- Non-English titles (Chinese, Korean, Japanese, Arabic, Cyrillic, etc.).
-- Physical / non-tech / non-professional roles: cook, dishwasher, driver, janitor, security guard, barista, waiter, cleaner, packer, labourer, factory worker, delivery, retail associate.
+### Garbage / Skip Rules — OMIT any role that matches:
+- Non-English titles (Chinese, Korean, Japanese, Arabic, Cyrillic characters, etc.).
+- Physical / non-tech / non-professional roles: cook, dishwasher, driver, janitor, security guard, barista, waiter, cleaner, packer, labourer, factory worker, delivery, retail associate — or any variation thereof.
 - Vague or nonsensical strings: single characters, numbers only, internal codes (e.g., "REQ-1234"), URLs, email addresses.
 - Roles with no real job-title meaning after de-slugging.
 - Duplicate roles that are essentially the same as an already-included item (keep only the best-worded version).
-- Internships at a company that only detects one role AND that role is "intern" (skip to avoid noise).
+- Single-role internship companies where the only role is "intern" (skip to avoid noise).
 
-### Field Rules
-- `roleName`: The core role name without seniority prefix. Example: title="Senior Backend Engineer" â†’ roleName="Backend Engineer".
-- `categoryName`: Must be one of: Engineering, Design, Product, Sales, Marketing, Operations, HR, Finance, Research, Support, General.
-- `department`: Must be one of: Engineering, Design, Product, Sales, Marketing, Operations, Research, Support, Business, General.
-- `level`: Must be one of: Junior, Mid-Level, Senior, Lead, Principal, Executive, Research Associate. Infer from title or context.
-- `experience`: Integer years, minimum 0. Infer from seniority: Junior=0-2, Mid-Level=2-4, Senior=4-8, Lead/Principal=6+.
-- `tenure`: Must be one of: full-time, part-time, contractual, internship.
-- `jobType`: Array, values from: remote, hybrid, onsite. Default to ["remote"] if unknown.
-- `skills`: Array of 3â€“6 relevant, specific technology/skill strings. Must match the role (e.g., a DevOps role gets ["Docker", "Kubernetes", "Terraform"] not ["React", "Figma"]).
-- `maxBudget`: Use null if unknown. Do NOT guess a number for senior roles.
-- `startDate`: ISO 8601 UTC. Use a reasonable near-future date (within 60 days from today: 2026-03-06T00:00:00.000Z).
-- `endDate`: Use null.
-- `source`: Always "external".
+### Field Rules (detailed)
+- `roleName`: Core role name without seniority prefix. title="Senior Backend Engineer" -> roleName="Backend Engineer".
+- `categoryName`: Exactly one of: Engineering, Design, Product, Sales, Marketing, Operations, HR, Finance, Research, Support, General.
+- `department`: Exactly one of: Business, Design, Engineering, General, Operations, Product, Research, Support.
+- `level`: Exactly one of: Lead, Senior, Mid-Level, Junior, Entry-Level, Executive, Research Associate. Infer from title: Principal/Staff/Architect->Lead, Sr->Senior, Jr/Trainee->Junior, Intern->Entry-Level, VP/CXO->Executive.
+- `experience`: Integer 1-9. Infer: Entry-Level=1, Junior=2, Mid-Level=3, Senior=5, Lead=7, Executive=8. Cap at 9 even if 10+ years implied.
+- `tenure`: Exactly one of: full-time, part-time, contractual, internship.
+- `jobType`: Array. Each item exactly one of: remote, hybrid, onsite. Default: ["remote"].
+- `skills`: Array of 3-6 plain, human-readable technology/skill strings. Specific to the role. No slugs or generics.
+- `maxBudget`: null if unknown. Never guess.
+- `startDate`: ISO 8601 UTC within 60 days. `endDate`: Always null. `source`: Always "external".
 
-### Description Rules
-- Length: 150â€“250 words.
-- Format: HTML with `<p><strong>heading</strong></p>` and `<ul><li>...</li></ul>` lists.
-- Sections to include: Role Overview, Key Responsibilities (4â€“6 bullets), Requirements (3â€“5 bullets).
+### Description Rules (detailed)
+- Length: 150-250 words.
+- Format: HTML using <p><strong>heading</strong></p> and <ul><li>...</li></ul> lists.
+- Sections: Role Overview, Key Responsibilities (4-6 bullets), Requirements (3-5 bullets).
 - Do NOT mention the company name, website, or any brand.
-- Do NOT copy-paste boilerplate such as "We are an equal opportunity employer" or generic HR filler.
-- Keep it focused, realistic, and specific to the role's actual skills.
+- Do NOT use filler phrases like "We are an equal opportunity employer", "competitive compensation", or "join our team".
+- Keep it focused, realistic, and specific to the role's actual technology stack.
 
-### shortDescription Rules
-- 20â€“40 words. One sentence. Generic, no company name.
-- Example: "We're looking for a Senior Backend Engineer to design scalable microservices, optimize APIs, and lead cloud deployment initiatives."
+---
 
-### Final Checklist before outputting
-- Every title is correctly Title Cased and de-slugged.
-- No garbage or non-tech roles in the output.
-- No duplicate titles.
-- skills array is role-specific (not generic).
-- Valid JSON only â€” no trailing commas, no markdown fences.
+## FINAL VALIDATION (check before outputting)
+1. All roles passed the technical-only gate — no nurses, cooks, drivers, or trade workers
+2. All titles are correctly Title Cased and de-slugged (no snake_case, no kebab-case)
+3. No duplicate titles (keep only the best-worded version of each role)
+4. tenure, department, level, jobType use ONLY the exact allowed enum values listed in STEP 3
+5. experience is an integer between 1 and 9 (never 0, never >9)
+6. No skill is a slug (no "node-js", no "machine_learning" — use "Node.js", "Machine Learning")
+7. skills are role-specific and semantically aligned, not generic filler
+8. Descriptions are 150-250 words, HTML-formatted, and contain no company name or boilerplate
+9. shortDescription is 20-40 words, one sentence, no company name
+10. Valid JSON only — no trailing commas, no markdown fences, no extra text outside the array
+
+### Additional Quality Rules
+- Non-English titles (Chinese, Korean, Japanese, Arabic, Cyrillic, etc.): OMIT immediately
+- Vague or nonsensical strings (single characters, numbers only, internal codes like "REQ-1234", URLs, email addresses): OMIT
+- Internship-only company with only one role and that role is "intern": OMIT (noise)
+- Example shortDescription: "We're looking for a Senior Backend Engineer to design scalable microservices, optimize APIs, and lead cloud deployment initiatives."
 """
         try:
             response = self._chat_complete_with_retry(
@@ -1446,16 +1521,58 @@ Return ONLY a valid JSON array (no markdown, no explanation). One object per rol
         merged["startDate"] = self._normalize_date(merged.get("startDate"), default["startDate"])
         merged["endDate"] = self._normalize_date(merged.get("endDate"), None)
 
-        # â”€â”€ Skills: plain string array, no catalog lookup or API creation â”€â”€
+        # ── Experience: enforce 1-9 range ──
+        try:
+            exp_raw = int(float(merged.get("experience") or 0))
+            merged["experience"] = max(1, min(9, exp_raw)) if exp_raw > 0 else 1
+        except Exception:
+            merged["experience"] = default.get("experience", 4)
+
+        # ── Tenure: enforce exact enum values ──
+        _ALLOWED_TENURE_SET = {"full-time", "part-time", "contractual", "internship"}
+        _TENURE_MAP = {
+            "fulltime": "full-time", "full time": "full-time",
+            "parttime": "part-time", "part time": "part-time",
+            "contract": "contractual", "contractor": "contractual",
+            "intern": "internship",
+        }
+        raw_tenure = str(merged.get("tenure") or "").strip().lower()
+        if raw_tenure in _ALLOWED_TENURE_SET:
+            merged["tenure"] = raw_tenure
+        else:
+            merged["tenure"] = _TENURE_MAP.get(raw_tenure, default.get("tenure", "full-time"))
+
+        # ── jobType: keep only allowed values ──
+        raw_jt = self._as_str_list(merged.get("jobType"), default=default.get("jobType", ["remote"]))
+        _JT_ENFORCE = {
+            "onsite": "onsite", "on-site": "onsite", "on site": "onsite", "office": "onsite",
+            "remote": "remote", "work from home": "remote", "wfh": "remote",
+            "hybrid": "hybrid",
+        }
+        _ALLOWED_JT = {"remote", "hybrid", "onsite"}
+        clean_jt = list(dict.fromkeys(
+            _JT_ENFORCE.get(v.strip().lower(), v.strip().lower())
+            for v in raw_jt
+            if _JT_ENFORCE.get(v.strip().lower(), v.strip().lower()) in _ALLOWED_JT
+        ))
+        merged["jobType"] = clean_jt or ["remote"]
+
+        # ── Skills: plain string array, drop slug-style strings, deduplicate ──
         raw_skills = self._as_str_list(merged.get("skills"), default=default["skills"])
-        # Deduplicate while preserving order.
+        _SLUG_ONLY_RE = re.compile(r"^[a-z0-9]+[-_][a-z0-9]")
         seen_skills: set = set()
         clean_skills = []
         for s in raw_skills:
-            key = s.strip().lower()
-            if key and key not in seen_skills:
+            cleaned_s = s.strip()
+            if not cleaned_s:
+                continue
+            if _SLUG_ONLY_RE.match(cleaned_s) and cleaned_s == cleaned_s.lower():
+                logger.debug("Dropping slug-style skill: %s", cleaned_s)
+                continue
+            key = cleaned_s.lower()
+            if key not in seen_skills:
                 seen_skills.add(key)
-                clean_skills.append(s.strip())
+                clean_skills.append(cleaned_s)
         merged["skills"] = clean_skills or default["skills"]
         if self._contains_non_english_job_data(
             title=merged["title"],
